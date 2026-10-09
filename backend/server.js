@@ -1,0 +1,515 @@
+const express = require('express');
+const cors = require('cors');
+const http = require('http');
+const fs = require('fs');
+const { WebSocketServer } = require('ws');
+const jwt = require('jsonwebtoken');
+const path = require('path');
+const yaml = require('yaml');
+
+const db = require('./db');
+const { parseUri, parseSubscriptionContent } = require('./parser');
+const tester = require('./tester');
+const generator = require('./generator');
+const { fetchSubscription, fetchAllSubscriptions } = require('./fetcher');
+const scheduler = require('./scheduler');
+
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+
+const PORT = process.env.PORT || 3580;
+
+app.use(cors());
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+
+// Broadcast helper for WebSocket
+function broadcast(type, payload) {
+  const msg = JSON.stringify({ type, payload });
+  wss.clients.forEach(client => {
+    if (client.readyState === 1) { // OPEN
+      client.send(msg);
+    }
+  });
+}
+
+// Auth Middleware for protected API routes
+function authMiddleware(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ error: '请先登录' });
+  }
+  const token = authHeader.replace(/^Bearer\s+/i, '');
+  try {
+    const decoded = jwt.verify(token, db.getJwtSecret());
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: '登录会话已过期，请重新登录' });
+  }
+}
+
+// ---------------- Public Endpoints ----------------
+
+// 1. User login
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body;
+  const user = db.getUser();
+  if (username !== user.username || !db.verifyPassword(password)) {
+    return res.status(400).json({ error: '用户名或密码错误' });
+  }
+  const token = jwt.sign({ username: user.username }, db.getJwtSecret(), { expiresIn: '7d' });
+  res.json({
+    token,
+    username: user.username,
+    hasDefaultPassword: user.hasDefaultPassword
+  });
+});
+
+// 2. Export / Public Subscription Generation (No token needed, identified by profile token)
+app.get('/sub/:token', (req, res) => {
+  const { token } = req.params;
+  const format = req.query.format || 'clash'; // 'clash' or 'base64'
+  const profile = db.getProfile(token);
+
+  if (!profile || !profile.enabled) {
+    return res.status(404).send('# 订阅不存在或已被禁用');
+  }
+
+  // Get nodes to include
+  let allNodes = [];
+  if (profile.subIds && profile.subIds.length > 0) {
+    allNodes = db.getNodes().filter(n => profile.subIds.includes(n.subId));
+  } else {
+    // If no specific subIds chosen, include nodes from all enabled subs plus manual nodes
+    const enabledSubIds = new Set(db.getSubscriptions().filter(s => s.enabled).map(s => s.id));
+    enabledSubIds.add('manual');
+    allNodes = db.getNodes().filter(n => enabledSubIds.has(n.subId));
+  }
+
+  // Filter nodes according to profile config
+  const filteredNodes = generator.filterNodes(allNodes, profile);
+
+  if (format === 'base64') {
+    const base64Data = generator.generateBase64Subscription(filteredNodes);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Subscription-Userinfo', 'upload=0; download=0; total=1073741824000; expire=0');
+    return res.send(base64Data);
+  }
+
+  // Clash YAML format
+  const clashYaml = generator.generateClashSubscription(filteredNodes, profile);
+  res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+  res.setHeader('profile-update-interval', '6');
+  res.setHeader('Subscription-Userinfo', 'upload=0; download=0; total=1073741824000; expire=0');
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(profile.name || 'subscription')}.yaml"`);
+  res.send(clashYaml);
+});
+
+// ---------------- Protected Management APIs ----------------
+
+// Get user profile / stats
+app.get('/api/user/info', authMiddleware, (req, res) => {
+  res.json(db.getUser());
+});
+
+app.post('/api/user/update-password', authMiddleware, (req, res) => {
+  const { oldPassword, newPassword } = req.body;
+  if (!db.verifyPassword(oldPassword)) {
+    return res.status(400).json({ error: '原密码不正确' });
+  }
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ error: '新密码不能少于6位字符' });
+  }
+  db.updatePassword(newPassword);
+  res.json({ message: '密码修改成功' });
+});
+
+// Overview Statistics
+app.get('/api/dashboard/stats', authMiddleware, (req, res) => {
+  const subs = db.getSubscriptions();
+  const nodes = db.getNodes();
+  const profiles = db.getProfiles();
+
+  const totalSubs = subs.length;
+  const totalNodes = nodes.length;
+  const combinedNodes = nodes.filter(n => n.inCombinedSub).length;
+  const aliveNodes = nodes.filter(n => n.delay && n.delay > 0).length;
+  const failedNodes = nodes.filter(n => n.delay === -1 || n.status === 'failed').length;
+  const untestedNodes = totalNodes - aliveNodes - failedNodes;
+
+  // Protocol distribution
+  const protocols = {};
+  nodes.forEach(n => {
+    const t = n.type || 'unknown';
+    protocols[t] = (protocols[t] || 0) + 1;
+  });
+
+  res.json({
+    totalSubs,
+    totalNodes,
+    combinedNodes,
+    aliveNodes,
+    failedNodes,
+    untestedNodes,
+    totalProfiles: profiles.length,
+    protocols,
+    isTesting: tester.isTesting
+  });
+});
+
+// Settings APIs
+app.get('/api/settings', authMiddleware, (req, res) => {
+  res.json(db.getSettings());
+});
+
+app.post('/api/settings', authMiddleware, (req, res) => {
+  const updated = db.updateSettings(req.body);
+  scheduler.restart();
+  res.json(updated);
+});
+
+// Subscriptions CRUD
+app.get('/api/subscriptions', authMiddleware, (req, res) => {
+  res.json(db.getSubscriptions());
+});
+
+app.post('/api/subscriptions', authMiddleware, async (req, res) => {
+  const { name, url, enabled, autoRefresh } = req.body;
+  if (!url || !url.trim()) {
+    return res.status(400).json({ error: '订阅地址不能为空' });
+  }
+
+  // Support single or multiple URLs (separated by newlines)
+  const urlLines = url.split('\n').map(u => u.trim()).filter(Boolean);
+  if (urlLines.length === 0) {
+    return res.status(400).json({ error: '有效的订阅地址不能为空' });
+  }
+
+  if (urlLines.length === 1) {
+    const singleUrl = urlLines[0];
+    const existing = db.findSubscriptionByUrl(singleUrl);
+    if (existing) {
+      return res.json({
+        skipped: true,
+        message: `该订阅地址已存在（名称：${existing.name}），已自动跳过重复添加`,
+        ...existing
+      });
+    }
+
+    const finalName = (name && name.trim()) ? name.trim() : db.getNextSubName();
+    const newSub = db.addSubscription({
+      name: finalName,
+      url: singleUrl,
+      enabled,
+      autoRefresh
+    });
+
+    // Auto fetch immediately
+    try {
+      await fetchSubscription(newSub.id);
+    } catch (e) {
+      // Non-fatal on creation
+    }
+
+    return res.json({
+      skipped: false,
+      ...db.getSubscription(newSub.id)
+    });
+  }
+
+  // Multiple URLs handling
+  const addedSubs = [];
+  let skippedCount = 0;
+  for (let i = 0; i < urlLines.length; i++) {
+    const u = urlLines[i];
+    const existing = db.findSubscriptionByUrl(u);
+    if (existing) {
+      skippedCount++;
+      continue;
+    }
+    const finalName = (name && name.trim())
+      ? `${name.trim()} (${i + 1})`
+      : db.getNextSubName();
+
+    const created = db.addSubscription({
+      name: finalName,
+      url: u,
+      enabled,
+      autoRefresh
+    });
+    addedSubs.push(created);
+    try {
+      await fetchSubscription(created.id);
+    } catch (e) {}
+  }
+
+  res.json({
+    batch: true,
+    addedCount: addedSubs.length,
+    skippedCount,
+    message: `添加完成：成功新增 ${addedSubs.length} 个订阅，自动跳过 ${skippedCount} 个重复订阅`
+  });
+});
+
+app.put('/api/subscriptions/:id', authMiddleware, (req, res) => {
+  const updated = db.updateSubscription(req.params.id, req.body);
+  if (!updated) return res.status(404).json({ error: '订阅不存在' });
+  res.json(updated);
+});
+
+app.delete('/api/subscriptions/:id', authMiddleware, (req, res) => {
+  const success = db.deleteSubscription(req.params.id);
+  if (!success) return res.status(404).json({ error: '订阅不存在' });
+  res.json({ success: true });
+});
+
+// Subscription Actions
+app.post('/api/subscriptions/:id/refresh', authMiddleware, async (req, res) => {
+  try {
+    const result = await fetchSubscription(req.params.id);
+    broadcast('subscription_updated', { id: req.params.id });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/subscriptions/refresh-all', authMiddleware, async (req, res) => {
+  try {
+    const results = await fetchAllSubscriptions();
+    broadcast('subscriptions_refreshed_all', results);
+    res.json(results);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Parse custom pasted nodes or links
+app.post('/api/nodes/parse-raw', authMiddleware, (req, res) => {
+  const { rawText } = req.body;
+  if (!rawText) return res.status(400).json({ error: '内容不能为空' });
+  const nodes = parseSubscriptionContent(rawText, yaml);
+  res.json({ nodes, count: nodes.length });
+});
+
+// Import pasted nodes directly
+app.post('/api/nodes/import-raw', authMiddleware, (req, res) => {
+  const { rawText, subName } = req.body;
+  if (!rawText) return res.status(400).json({ error: '内容不能为空' });
+
+  const nodes = parseSubscriptionContent(rawText, yaml);
+  if (nodes.length === 0) {
+    return res.status(400).json({ error: '未能识别出任何有效节点' });
+  }
+
+  // Create as manual subscription or add directly
+  const finalSubName = (subName && subName.trim()) ? subName.trim() : db.getNextSubName();
+  const sub = db.addSubscription({
+    name: finalSubName,
+    url: 'manual://' + Date.now(),
+    autoRefresh: false
+  });
+
+  db.setSubscriptionNodes(sub.id, nodes);
+
+  // 导入订阅后，自动测试节点延迟：成功则加入整合订阅，失败则不加入
+  setTimeout(async () => {
+    try {
+      const freshNodes = db.getNodes({ subId: sub.id });
+      if (!freshNodes || freshNodes.length === 0) return;
+      const settings = db.getSettings();
+      const testResults = await tester.testNodes(freshNodes, {
+        testUrl: settings.testUrl,
+        timeout: settings.testTimeout,
+        concurrency: settings.testConcurrency,
+        maxRetries: 0
+      });
+      db.updateNodesBatch(testResults);
+      broadcast('nodes_cleaned', { subId: sub.id });
+      const aliveCount = testResults.filter(r => r.inCombinedSub).length;
+      db.addLog('info', `手动导入 [${sub.name}] 自动测试完毕：${aliveCount} 个可用节点已自动纳入整合订阅`, { subId: sub.id, aliveCount });
+    } catch (e) {
+      console.error('[Manual Import] Auto test error:', e.message);
+    }
+  }, 800);
+
+  res.json({ subId: sub.id, count: nodes.length });
+});
+
+// Nodes Management
+app.get('/api/nodes', authMiddleware, (req, res) => {
+  const { subId, protocol, status, keyword, inCombinedSub } = req.query;
+  const nodes = db.getNodes({ subId, protocol, status, keyword, inCombinedSub });
+  res.json(nodes);
+});
+
+app.put('/api/nodes/:id', authMiddleware, (req, res) => {
+  const updated = db.updateNode(req.params.id, req.body);
+  if (!updated) return res.status(404).json({ error: '节点不存在' });
+  broadcast('node_updated', updated);
+  res.json(updated);
+});
+
+// Toggle or batch set whether nodes are in combined sub
+app.post('/api/nodes/batch-combined-status', authMiddleware, (req, res) => {
+  const { ids, inCombinedSub } = req.body;
+  if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids 必须为数组' });
+  const count = db.batchSetCombinedSub(ids, inCombinedSub);
+  broadcast('nodes_cleaned', { count });
+  res.json({ success: true, count });
+});
+
+app.delete('/api/nodes/:id', authMiddleware, (req, res) => {
+  db.deleteNode(req.params.id);
+  res.json({ success: true });
+});
+
+app.post('/api/nodes/batch-delete', authMiddleware, (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids 必须为数组' });
+  db.deleteNodes(ids);
+  res.json({ success: true, count: ids.length });
+});
+
+// Clear failed nodes
+app.post('/api/nodes/filter-failed', authMiddleware, (req, res) => {
+  const result = db.filterFailedNodes();
+  broadcast('nodes_cleaned', result);
+  res.json(result);
+});
+
+// Deduplicate nodes
+app.post('/api/nodes/deduplicate', authMiddleware, (req, res) => {
+  const result = db.deduplicateNodes();
+  broadcast('nodes_cleaned', result);
+  res.json(result);
+});
+
+// Latency Speed Test (手动测速支持重试 3 次，失败则踢出整合订阅)
+app.post('/api/nodes/test-speed', authMiddleware, async (req, res) => {
+  if (tester.isTesting) {
+    return res.status(400).json({ error: '测速任务正在进行中，请等待完成' });
+  }
+
+  const { ids, subId, maxRetries = 3 } = req.body;
+  let targetNodes = [];
+
+  if (Array.isArray(ids) && ids.length > 0) {
+    const idSet = new Set(ids);
+    targetNodes = db.getNodes().filter(n => idSet.has(n.id));
+  } else if (subId) {
+    targetNodes = db.getNodes({ subId });
+  } else {
+    targetNodes = db.getNodes();
+  }
+
+  if (targetNodes.length === 0) {
+    return res.status(400).json({ error: '没有需要测速的节点' });
+  }
+
+  const settings = db.getSettings();
+
+  // Respond immediately and run in background with WebSocket broadcasts
+  res.json({
+    message: '测速任务已在后台启动',
+    total: targetNodes.length
+  });
+
+  try {
+    broadcast('test_started', { total: targetNodes.length });
+
+    const batchUpdates = [];
+    const results = await tester.testNodes(targetNodes, {
+      testUrl: settings.testUrl,
+      timeout: settings.testTimeout,
+      concurrency: settings.testConcurrency,
+      maxRetries: Number(maxRetries) || 3, // 手动测速超时时额外自动重试 3 次
+      onProgress: (progress) => {
+        batchUpdates.push(progress.latest);
+        broadcast('test_progress', progress);
+      }
+    });
+
+    db.updateNodesBatch(results);
+    broadcast('test_completed', { results, count: results.length });
+    const aliveCount = results.filter(r => r.inCombinedSub).length;
+    db.addLog('info', `完成 ${results.length} 个节点的延迟测速 (已自动维护整合状态: ${aliveCount} 个保留在整合订阅中)`);
+
+  } catch (err) {
+    broadcast('test_error', { error: err.message });
+    db.addLog('error', `测速异常: ${err.message}`);
+  }
+});
+
+// Profiles (整合订阅)
+app.get('/api/profiles', authMiddleware, (req, res) => {
+  res.json(db.getProfiles());
+});
+
+app.post('/api/profiles', authMiddleware, (req, res) => {
+  const newProf = db.addProfile(req.body);
+  res.json(newProf);
+});
+
+app.put('/api/profiles/:id', authMiddleware, (req, res) => {
+  const updated = db.updateProfile(req.params.id, req.body);
+  if (!updated) return res.status(404).json({ error: '整合订阅不存在' });
+  res.json(updated);
+});
+
+app.delete('/api/profiles/:id', authMiddleware, (req, res) => {
+  db.deleteProfile(req.params.id);
+  res.json({ success: true });
+});
+
+// Logs
+app.get('/api/logs', authMiddleware, (req, res) => {
+  res.json(db.getLogs());
+});
+
+// Full System Config Export & Import (备份与恢复全量配置)
+app.get('/api/system/config/export', authMiddleware, (req, res) => {
+  const fullConfig = db.exportFullConfig();
+  res.setHeader('Content-Disposition', `attachment; filename="sub_backup_${Date.now()}.json"`);
+  res.setHeader('Content-Type', 'application/json');
+  res.send(JSON.stringify(fullConfig, null, 2));
+});
+
+app.post('/api/system/config/import', authMiddleware, (req, res) => {
+  try {
+    const { configData, mode = 'merge' } = req.body;
+    if (!configData) {
+      return res.status(400).json({ error: '配置内容不能为空' });
+    }
+    const result = db.importFullConfig(configData, mode);
+    db.addLog('info', `全量配置文件导入成功 (模式: ${mode === 'overwrite' ? '完整覆盖' : '智能合并'})`, result);
+    broadcast('subscription_updated', {});
+    broadcast('nodes_cleaned', {});
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: '配置文件导入失败: ' + err.message });
+  }
+});
+
+// Serve frontend static files
+const DIST_PATH = path.join(__dirname, '..', 'dist');
+if (fs.existsSync(DIST_PATH)) {
+  app.use(express.static(DIST_PATH));
+  app.use((req, res, next) => {
+    if (req.method === 'GET' && !req.path.startsWith('/api') && !req.path.startsWith('/sub')) {
+      return res.sendFile(path.join(DIST_PATH, 'index.html'));
+    }
+    next();
+  });
+}
+
+// Start server
+server.listen(PORT, () => {
+  console.log(`===============================================`);
+  console.log(`SUB 聚合订阅管理平台已启动: http://127.0.0.1:${PORT}`);
+  console.log(`默认管理员账号: admin / admin123456`);
+  console.log(`===============================================`);
+  scheduler.init();
+});
