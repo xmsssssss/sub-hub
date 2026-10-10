@@ -23,9 +23,9 @@ cd "$SCRIPT_DIR"
 if [ ! -f "mihomo" ] && [ ! -f "backend/mihomo" ] && [ ! -f "/usr/local/bin/mihomo" ]; then
     echo "[提示] 检测到 Linux 环境下未放置 mihomo 二进制文件，正在尝试自动下载..."
     ARCH=$(uname -m)
-    if [ "$ARCH" = "x86_64" ]; then TARGET="amd64";
+    if [ "$ARCH" = "x86_64" ]; then TARGET="amd64-compatible";
     elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then TARGET="arm64";
-    else TARGET="amd64"; fi
+    else TARGET="amd64-compatible"; fi
     MIHOMO_URL="https://github.com/MetaCubeX/mihomo/releases/download/v1.19.0/mihomo-linux-${TARGET}-v1.19.0.gz"
     MIHOMO_MIRROR="https://ghfast.top/$MIHOMO_URL"
     if command -v curl &> /dev/null; then

@@ -19,11 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates tzdata gzip bash \
     && rm -rf /var/lib/apt/lists/*
 
-# Download Mihomo Linux binary (auto-detect amd64 / arm64) to /usr/local/bin and /app
+# Download Mihomo Linux binary (compatible with v1/v2/v3 AMD64 microarchitecture & ARM64)
 RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" = "x86_64" ]; then TARGET="amd64"; \
+    if [ "$ARCH" = "x86_64" ]; then TARGET="amd64-compatible"; \
     elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then TARGET="arm64"; \
-    else TARGET="amd64"; fi && \
+    else TARGET="amd64-compatible"; fi && \
     echo "Downloading Mihomo for architecture: $TARGET ($ARCH)..." && \
     (curl -sL "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.0/mihomo-linux-${TARGET}-v1.19.0.gz" -o /tmp/mihomo.gz || \
      curl -sL "https://ghfast.top/https://github.com/MetaCubeX/mihomo/releases/download/v1.19.0/mihomo-linux-${TARGET}-v1.19.0.gz" -o /tmp/mihomo.gz) && \
