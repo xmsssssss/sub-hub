@@ -1,5 +1,5 @@
 # Multi-stage build
-FROM node:20-alpine AS builder
+FROM node:20-slim AS builder
 
 WORKDIR /app
 COPY package*.json ./
@@ -8,15 +8,16 @@ RUN npm install
 COPY . .
 RUN npm run build
 
-# Runtime Stage
-FROM node:20-alpine
+# Runtime Stage (Debian Bookworm slim with native glibc, fully compatible with Mihomo Linux binaries)
+FROM node:20-slim
 
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3580
 
-# Install curl, ca-certificates, tzdata, libc6-compat
-RUN apk add --no-cache curl ca-certificates tzdata gzip bash libc6-compat
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates tzdata gzip bash \
+    && rm -rf /var/lib/apt/lists/*
 
 # Download Mihomo Linux binary (auto-detect amd64 / arm64) to /usr/local/bin and /app
 RUN ARCH=$(uname -m) && \
@@ -27,9 +28,11 @@ RUN ARCH=$(uname -m) && \
     (curl -sL "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.0/mihomo-linux-${TARGET}-v1.19.0.gz" -o /tmp/mihomo.gz || \
      curl -sL "https://ghfast.top/https://github.com/MetaCubeX/mihomo/releases/download/v1.19.0/mihomo-linux-${TARGET}-v1.19.0.gz" -o /tmp/mihomo.gz) && \
     gzip -d /tmp/mihomo.gz && \
-    chmod +x /tmp/mihomo && \
+    chmod 755 /tmp/mihomo && \
     mv /tmp/mihomo /usr/local/bin/mihomo && \
-    cp /usr/local/bin/mihomo /app/mihomo
+    cp /usr/local/bin/mihomo /app/mihomo && \
+    chmod 755 /app/mihomo && \
+    /usr/local/bin/mihomo -v
 
 COPY package*.json ./
 RUN npm install --omit=dev

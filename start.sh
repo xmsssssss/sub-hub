@@ -20,18 +20,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Check Mihomo Linux binary
-if [ ! -f "mihomo" ] && [ ! -f "backend/mihomo" ]; then
-    echo "[提示] 检测到 Linux 环境下未放置 mihomo 二进制文件，正在尝试自动下载 Linux amd64 版本..."
-    MIHOMO_URL="https://github.com/MetaCubeX/mihomo/releases/download/v1.19.0/mihomo-linux-amd64-v1.19.0.gz"
+if [ ! -f "mihomo" ] && [ ! -f "backend/mihomo" ] && [ ! -f "/usr/local/bin/mihomo" ]; then
+    echo "[提示] 检测到 Linux 环境下未放置 mihomo 二进制文件，正在尝试自动下载..."
+    ARCH=$(uname -m)
+    if [ "$ARCH" = "x86_64" ]; then TARGET="amd64";
+    elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then TARGET="arm64";
+    else TARGET="amd64"; fi
+    MIHOMO_URL="https://github.com/MetaCubeX/mihomo/releases/download/v1.19.0/mihomo-linux-${TARGET}-v1.19.0.gz"
+    MIHOMO_MIRROR="https://ghfast.top/$MIHOMO_URL"
     if command -v curl &> /dev/null; then
-        curl -sL "$MIHOMO_URL" -o mihomo.gz && gzip -d mihomo.gz && chmod +x mihomo || echo "[警告] 自动下载失败，如需测速请手动放置 mihomo 文件并给予执行权限"
+        (curl -sL "$MIHOMO_URL" -o mihomo.gz || curl -sL "$MIHOMO_MIRROR" -o mihomo.gz) && gzip -d mihomo.gz && chmod 755 mihomo || echo "[警告] 自动下载失败，如需测速请手动放置 mihomo 文件并给予执行权限"
     elif command -v wget &> /dev/null; then
-        wget -q "$MIHOMO_URL" -O mihomo.gz && gzip -d mihomo.gz && chmod +x mihomo || echo "[警告] 自动下载失败，如需测速请手动放置 mihomo 文件并给予执行权限"
+        (wget -q "$MIHOMO_URL" -O mihomo.gz || wget -q "$MIHOMO_MIRROR" -O mihomo.gz) && gzip -d mihomo.gz && chmod 755 mihomo || echo "[警告] 自动下载失败，如需测速请手动放置 mihomo 文件并给予执行权限"
     fi
 fi
 
 if [ -f "mihomo" ]; then
-    chmod +x mihomo
+    chmod 755 mihomo
 fi
 
 if [ ! -d "node_modules" ]; then

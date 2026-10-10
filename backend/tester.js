@@ -20,21 +20,21 @@ class MihomoTester {
     const isWin = process.platform === 'win32';
     const binName = isWin ? 'mihomo.exe' : 'mihomo';
 
-    // 1. Look in root directory of project
+    // 1. Look in /usr/local/bin or system standard directories
+    const usrLocalPath = path.join('/usr/local/bin', binName);
+    if (fs.existsSync(usrLocalPath)) return usrLocalPath;
+
+    // 2. Look in root directory of project
     const rootPath = path.join(__dirname, '..', binName);
     if (fs.existsSync(rootPath)) return rootPath;
-
-    // 2. Look in backend directory
-    const backendPath = path.join(__dirname, binName);
-    if (fs.existsSync(backendPath)) return backendPath;
 
     // 3. Look in /app directory (Docker container root)
     const appPath = path.join('/app', binName);
     if (fs.existsSync(appPath)) return appPath;
 
-    // 4. Look in /usr/local/bin or system standard directories
-    const usrLocalPath = path.join('/usr/local/bin', binName);
-    if (fs.existsSync(usrLocalPath)) return usrLocalPath;
+    // 4. Look in backend directory
+    const backendPath = path.join(__dirname, binName);
+    if (fs.existsSync(backendPath)) return backendPath;
 
     // 5. Fallback to system PATH
     return binName;
@@ -127,11 +127,12 @@ class MihomoTester {
 
     fs.writeFileSync(this.configFile, yaml.stringify(configData), 'utf8');
 
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       let started = false;
+      let lastError = '';
       const timeout = setTimeout(() => {
         if (!started) {
-          resolve(false);
+          resolve({ ok: false, error: lastError || '启动超时 (7s 内未收到 Mihomo RESTful API 监听就绪信号)' });
         }
       }, 7000);
 
@@ -144,7 +145,7 @@ class MihomoTester {
             if (!started) {
               started = true;
               clearTimeout(timeout);
-              resolve(true);
+              resolve({ ok: true });
             }
           }
         });
@@ -152,32 +153,34 @@ class MihomoTester {
         this.process.stderr.on('data', d => {
           const str = d.toString();
           console.error('[Mihomo stderr]:', str);
+          lastError = str.trim();
           if (str.includes('RESTful API listening at') || str.includes('Initial configuration complete')) {
             if (!started) {
               started = true;
               clearTimeout(timeout);
-              resolve(true);
+              resolve({ ok: true });
             }
           }
         });
 
         this.process.on('error', err => {
           console.error('[Mihomo] Process spawn error:', err.message);
+          lastError = err.message;
           if (!started) {
             started = true;
             clearTimeout(timeout);
-            resolve(false);
+            resolve({ ok: false, error: err.message });
           }
         });
 
         this.process.on('exit', (code, signal) => {
           console.warn(`[Mihomo] Process exited with code ${code}, signal ${signal}`);
-          this.process = null;
           if (!started) {
             started = true;
             clearTimeout(timeout);
-            resolve(false);
+            resolve({ ok: false, error: lastError || `进程启动后异常退出 (退出码: ${code}, 信号: ${signal})` });
           }
+          this.process = null;
         });
 
         // Also polling health check
@@ -191,13 +194,13 @@ class MihomoTester {
             started = true;
             clearInterval(interval);
             clearTimeout(timeout);
-            resolve(true);
+            resolve({ ok: true });
           }
         }, 300);
 
       } catch (err) {
         clearTimeout(timeout);
-        resolve(false);
+        resolve({ ok: false, error: err.message });
       }
     });
   }
@@ -288,13 +291,20 @@ class MihomoTester {
 
     this.isTesting = true;
     try {
+      // 确保二进制文件拥有可执行权限 (针对 Linux / Docker 运行时)
+      if (process.platform !== 'win32' && fs.existsSync(this.mihomoBinary)) {
+        try {
+          fs.chmodSync(this.mihomoBinary, 0o755);
+        } catch (e) {}
+      }
+
       // 对测速节点名称去重，避免 Mihomo 解析 yaml 时出现 duplicate proxy name 错误退出
       const uniqueNamedNodes = this.ensureUniqueNodeNames(nodes);
 
       // 1. Start mihomo instance loaded with these nodes
-      const started = await this.startMihomoWithNodes(uniqueNamedNodes);
-      if (!started) {
-        throw new Error(`无法启动 Mihomo 内核程序 (${this.mihomoBinary})，请检查内核文件是否存在并具有执行权限。`);
+      const startRes = await this.startMihomoWithNodes(uniqueNamedNodes);
+      if (!startRes || !startRes.ok) {
+        throw new Error(`无法启动 Mihomo 内核程序 (${this.mihomoBinary})，原因: ${startRes?.error || '未知错误'}`);
       }
 
       // 2. Queue for testing
