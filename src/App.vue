@@ -398,6 +398,10 @@ const setupWebSocket = () => {
       } else if (data.type === 'test_completed') {
         isTesting.value = false;
         refreshAllData();
+      } else if (data.type === 'test_error') {
+        isTesting.value = false;
+        alert('测速失败: ' + (data.payload?.error || 'Mihomo 内核启动或执行异常'));
+        refreshAllData();
       } else if (data.type === 'subscription_updated' || data.type === 'nodes_cleaned') {
         refreshAllData();
       }

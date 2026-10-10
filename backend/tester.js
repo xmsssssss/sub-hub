@@ -28,7 +28,15 @@ class MihomoTester {
     const backendPath = path.join(__dirname, binName);
     if (fs.existsSync(backendPath)) return backendPath;
 
-    // 3. Fallback to system PATH
+    // 3. Look in /app directory (Docker container root)
+    const appPath = path.join('/app', binName);
+    if (fs.existsSync(appPath)) return appPath;
+
+    // 4. Look in /usr/local/bin or system standard directories
+    const usrLocalPath = path.join('/usr/local/bin', binName);
+    if (fs.existsSync(usrLocalPath)) return usrLocalPath;
+
+    // 5. Fallback to system PATH
     return binName;
   }
 
@@ -62,6 +70,11 @@ class MihomoTester {
   }
 
   ensureTempDir() {
+    // 优先使用 /tmp/temp_mihomo 或系统临时目录，避免 Docker volume 目录由于宿主机挂载文件权限 umask 导致不可执行或写锁冲突
+    if (process.platform !== 'win32') {
+      this.configDir = '/tmp/sub_temp_mihomo';
+      this.configFile = path.join(this.configDir, 'config.yaml');
+    }
     if (!fs.existsSync(this.configDir)) {
       fs.mkdirSync(this.configDir, { recursive: true });
     }
@@ -88,7 +101,7 @@ class MihomoTester {
 
     // Mihomo configuration
     const configData = {
-      'mixed-port': this.mixedPort,
+      'mixed-port': 0, // 设为 0 关闭本地代理端口监听，测速仅需 external-controller RESTful API，避免端口冲突或权限限制
       'allow-lan': false,
       mode: 'rule',
       'log-level': 'warning',
@@ -122,17 +135,34 @@ class MihomoTester {
         });
 
         this.process.stderr.on('data', d => {
-          // Log errors if necessary
+          const str = d.toString();
+          console.error('[Mihomo stderr]:', str);
+          if (str.includes('RESTful API listening at') || str.includes('Initial configuration complete')) {
+            if (!started) {
+              started = true;
+              clearTimeout(timeout);
+              resolve(true);
+            }
+          }
         });
 
         this.process.on('error', err => {
-          console.error('[Mihomo] Process start error:', err);
-          clearTimeout(timeout);
-          resolve(false);
+          console.error('[Mihomo] Process spawn error:', err.message);
+          if (!started) {
+            started = true;
+            clearTimeout(timeout);
+            resolve(false);
+          }
         });
 
-        this.process.on('exit', code => {
+        this.process.on('exit', (code, signal) => {
+          console.warn(`[Mihomo] Process exited with code ${code}, signal ${signal}`);
           this.process = null;
+          if (!started) {
+            started = true;
+            clearTimeout(timeout);
+            resolve(false);
+          }
         });
 
         // Also polling health check
