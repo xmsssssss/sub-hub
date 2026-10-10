@@ -69,6 +69,21 @@ class MihomoTester {
     return p;
   }
 
+  ensureUniqueNodeNames(nodes) {
+    const nameCount = new Map();
+    return nodes.map(n => {
+      let name = (n.name || 'Proxy').trim();
+      if (!nameCount.has(name)) {
+        nameCount.set(name, 1);
+        return { ...n, name };
+      } else {
+        const count = nameCount.get(name) + 1;
+        nameCount.set(name, count);
+        return { ...n, name: `${name} (${count})` };
+      }
+    });
+  }
+
   ensureTempDir() {
     // 优先使用 /tmp/temp_mihomo 或系统临时目录，避免 Docker volume 目录由于宿主机挂载文件权限 umask 导致不可执行或写锁冲突
     if (process.platform !== 'win32') {
@@ -273,8 +288,11 @@ class MihomoTester {
 
     this.isTesting = true;
     try {
+      // 对测速节点名称去重，避免 Mihomo 解析 yaml 时出现 duplicate proxy name 错误退出
+      const uniqueNamedNodes = this.ensureUniqueNodeNames(nodes);
+
       // 1. Start mihomo instance loaded with these nodes
-      const started = await this.startMihomoWithNodes(nodes);
+      const started = await this.startMihomoWithNodes(uniqueNamedNodes);
       if (!started) {
         throw new Error(`无法启动 Mihomo 内核程序 (${this.mihomoBinary})，请检查内核文件是否存在并具有执行权限。`);
       }
@@ -282,12 +300,12 @@ class MihomoTester {
       // 2. Queue for testing
       const results = [];
       let index = 0;
-      const total = nodes.length;
+      const total = uniqueNamedNodes.length;
 
       const worker = async () => {
         while (index < total) {
           const currentIndex = index++;
-          const node = nodes[currentIndex];
+          const node = uniqueNamedNodes[currentIndex];
           const testRes = await this.testSingleProxyWithRetry(
             node.name,
             testUrl,

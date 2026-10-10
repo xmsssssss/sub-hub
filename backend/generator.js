@@ -164,9 +164,28 @@ function filterNodes(nodes, profile) {
 }
 
 /**
+ * Ensure proxy names are strictly unique to avoid Clash parser rejection
+ */
+function ensureUniqueProxyNames(nodes) {
+  const nameCount = new Map();
+  return nodes.map(n => {
+    let name = (n.name || 'Proxy').trim();
+    if (!nameCount.has(name)) {
+      nameCount.set(name, 1);
+      return { ...n, name };
+    } else {
+      const count = nameCount.get(name) + 1;
+      nameCount.set(name, count);
+      return { ...n, name: `${name} (${count})` };
+    }
+  });
+}
+
+/**
  * Generate full Clash/Mihomo YAML subscription
  */
-function generateClashSubscription(nodes, profile = {}) {
+function generateClashSubscription(rawNodes, profile = {}) {
+  const nodes = ensureUniqueProxyNames(rawNodes);
   const proxyNames = nodes.map(n => n.name);
 
   // Fallback if no proxies
