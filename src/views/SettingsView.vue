@@ -344,7 +344,7 @@ const updatePassword = async () => {
 
   pwdUpdating.value = true;
   try {
-    await api.post('/auth/password', {
+    await api.post('/user/update-password', {
       oldPassword: pwdForm.oldPassword,
       newPassword: pwdForm.newPassword
     });

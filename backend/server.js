@@ -126,6 +126,19 @@ app.post('/api/user/update-password', authMiddleware, (req, res) => {
   res.json({ message: '密码修改成功' });
 });
 
+// Compatible alias for password update
+app.post('/api/auth/password', authMiddleware, (req, res) => {
+  const { oldPassword, newPassword } = req.body;
+  if (!db.verifyPassword(oldPassword)) {
+    return res.status(400).json({ error: '原密码不正确' });
+  }
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ error: '新密码不能少于6位字符' });
+  }
+  db.updatePassword(newPassword);
+  res.json({ message: '密码修改成功' });
+});
+
 // Overview Statistics
 app.get('/api/dashboard/stats', authMiddleware, (req, res) => {
   const subs = db.getSubscriptions();
