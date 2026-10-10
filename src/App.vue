@@ -5,8 +5,15 @@
 
     <!-- Main Dashboard when logged in -->
     <div v-else class="app-shell">
+      <!-- Mobile Backdrop -->
+      <div
+        v-if="isMobileMenuOpen"
+        class="mobile-backdrop"
+        @click="closeMobileMenu"
+      ></div>
+
       <!-- Sidebar Navigation -->
-      <aside class="sidebar glass">
+      <aside :class="['sidebar', 'glass', { 'sidebar-open': isMobileMenuOpen }]">
         <div class="sidebar-brand">
           <div class="brand-logo">
             <Zap :size="24" />
@@ -15,12 +22,15 @@
             <span class="brand-title">SUB</span>
             <span class="brand-sub">Mihomo Core</span>
           </div>
+          <button class="mobile-close-btn" @click="closeMobileMenu">
+            <X :size="20" />
+          </button>
         </div>
 
         <nav class="sidebar-nav">
           <button
             :class="['nav-item', { active: currentTab === 'dashboard' }]"
-            @click="currentTab = 'dashboard'"
+            @click="switchTab('dashboard')"
           >
             <LayoutDashboard :size="18" />
             <span>仪表盘概览</span>
@@ -28,7 +38,7 @@
 
           <button
             :class="['nav-item', { active: currentTab === 'subscriptions' }]"
-            @click="currentTab = 'subscriptions'"
+            @click="switchTab('subscriptions')"
           >
             <Radio :size="18" />
             <span>机场订阅管理</span>
@@ -37,7 +47,7 @@
 
           <button
             :class="['nav-item', { active: currentTab === 'nodes' }]"
-            @click="viewAllNodes"
+            @click="viewAllNodesMobile"
           >
             <Layers :size="18" />
             <span>节点池与测速</span>
@@ -46,7 +56,7 @@
 
           <button
             :class="['nav-item', { active: currentTab === 'profiles' }]"
-            @click="currentTab = 'profiles'"
+            @click="switchTab('profiles')"
           >
             <Shield :size="18" />
             <span>整合订阅 (分流)</span>
@@ -54,7 +64,7 @@
 
           <button
             :class="['nav-item', { active: currentTab === 'settings' }]"
-            @click="currentTab = 'settings'"
+            @click="switchTab('settings')"
           >
             <Settings :size="18" />
             <span>系统配置</span>
@@ -82,13 +92,16 @@
         <!-- Top App Bar -->
         <header class="app-header glass">
           <div class="header-left">
+            <button class="mobile-menu-btn" @click="toggleMobileMenu" title="打开导航菜单">
+              <Menu :size="20" />
+            </button>
             <span class="tab-crumb">{{ tabNames[currentTab] }}</span>
           </div>
 
           <div class="header-right">
             <div class="status-pill cursor-pointer" v-if="isTesting" @click="showTestModal = !showTestModal" title="点击展开/收起测速详情气泡">
               <span class="pulse-dot"></span>
-              <span>Mihomo 测速运行中: {{ testProgress.current }} / {{ testProgress.total }}</span>
+              <span class="status-pill-text">测速中: {{ testProgress.current }}/{{ testProgress.total }}</span>
             </div>
 
             <!-- Theme Toggle Button (Light by default) -->
@@ -99,12 +112,12 @@
             >
               <Sun v-if="currentTheme === 'light'" :size="15" class="text-warning" />
               <Moon v-else :size="15" class="text-primary" />
-              <span>{{ currentTheme === 'light' ? '明亮模式' : '暗色模式' }}</span>
+              <span class="hide-mobile">{{ currentTheme === 'light' ? '明亮' : '暗色' }}</span>
             </button>
 
             <button class="btn btn-secondary btn-sm" @click="refreshAllData">
               <RefreshCw :size="14" :class="{ 'animate-spin': isRefreshingData }" />
-              <span>刷新数据</span>
+              <span class="hide-mobile">刷新</span>
             </button>
           </div>
         </header>
@@ -220,7 +233,9 @@ import {
   RefreshCw,
   Activity,
   Sun,
-  Moon
+  Moon,
+  Menu,
+  X
 } from 'lucide-vue-next';
 import api from './api';
 import LoginModal from './components/LoginModal.vue';
@@ -232,6 +247,20 @@ import SettingsView from './views/SettingsView.vue';
 
 const isLoggedIn = ref(!!localStorage.getItem('sub_token'));
 const currentUser = ref(localStorage.getItem('sub_user') || 'admin');
+const isMobileMenuOpen = ref(false);
+
+const toggleMobileMenu = () => {
+  isMobileMenuOpen.value = !isMobileMenuOpen.value;
+};
+
+const closeMobileMenu = () => {
+  isMobileMenuOpen.value = false;
+};
+
+const switchTab = (tab) => {
+  currentTab.value = tab;
+  closeMobileMenu();
+};
 
 // Default Theme is 'light'
 const currentTheme = ref(localStorage.getItem('sub_theme') || 'light');
@@ -331,6 +360,11 @@ const handleViewSubNodes = (subId) => {
 const viewAllNodes = () => {
   selectedSubFilter.value = '';
   currentTab.value = 'nodes';
+};
+
+const viewAllNodesMobile = () => {
+  viewAllNodes();
+  closeMobileMenu();
 };
 
 const handleStartSpeedTest = async (ids) => {
@@ -807,5 +841,111 @@ onMounted(() => {
 
 .cursor-pointer {
   cursor: pointer;
+}
+
+/* Mobile Responsive Adjustments */
+.mobile-menu-btn,
+.mobile-close-btn {
+  display: none;
+  background: transparent;
+  border: none;
+  color: var(--text-main);
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mobile-close-btn {
+  margin-left: auto;
+}
+
+.mobile-backdrop {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .mobile-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mobile-close-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mobile-backdrop {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(15, 23, 42, 0.5);
+    backdrop-filter: blur(4px);
+    z-index: 99;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 270px;
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2);
+  }
+
+  .sidebar.sidebar-open {
+    transform: translateX(0);
+  }
+
+  .app-header {
+    padding: 0 16px;
+    height: 56px;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .tab-crumb {
+    font-size: 15px;
+  }
+
+  .content-scroll {
+    padding: 16px;
+  }
+
+  .hide-mobile {
+    display: none;
+  }
+
+  .status-pill {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  .status-pill-text {
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .test-floating-card {
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    width: auto;
+    max-width: none;
+    padding: 14px 16px;
+  }
 }
 </style>

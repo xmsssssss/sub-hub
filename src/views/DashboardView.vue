@@ -394,4 +394,50 @@ onMounted(() => {
   color: var(--text-dim);
   font-size: 13px;
 }
+
+@media (max-width: 768px) {
+  .dashboard-container {
+    gap: 16px;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+
+  .stat-card {
+    padding: 14px 16px;
+    gap: 12px;
+  }
+
+  .stat-icon {
+    width: 42px;
+    height: 42px;
+  }
+
+  .stat-value {
+    font-size: 22px;
+  }
+
+  .action-banner {
+    padding: 18px 16px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .banner-buttons {
+    width: 100%;
+  }
+
+  .banner-buttons .btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .content-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+}
 </style>

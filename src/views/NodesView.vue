@@ -906,4 +906,59 @@ defineExpose({
   gap: 10px;
   margin-top: 10px;
 }
+
+@media (max-width: 768px) {
+  .toolbar {
+    padding: 12px 14px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .search-box {
+    min-width: 100%;
+  }
+
+  .filter-selects {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    width: 100%;
+  }
+
+  .filter-selects select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .batch-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 14px;
+  }
+
+  .batch-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .batch-actions .btn {
+    flex: 1;
+    justify-content: center;
+    font-size: 11.5px;
+    padding: 6px 8px;
+  }
+
+  .form-row {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .col-4, .col-6, .col-8 {
+    flex: 1;
+    width: 100%;
+  }
+}
 </style>

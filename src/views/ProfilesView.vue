@@ -673,4 +673,30 @@ input:checked + .slider:before { transform: translateX(16px); }
   gap: 12px;
   margin-top: 10px;
 }
+
+@media (max-width: 768px) {
+  .profiles-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .profile-card {
+    padding: 16px 14px;
+  }
+
+  .form-row {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .col-6 {
+    flex: 1;
+    width: 100%;
+  }
+
+  .preview-textarea {
+    height: 320px;
+    font-size: 11px;
+  }
+}
 </style>

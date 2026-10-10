@@ -398,6 +398,44 @@ textarea {
   0%, 100% { opacity: 1; }
   50% { opacity: .5; }
 }
-.animate-pulse {
-  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+/* Mobile Responsive Global Rules */
+@media (max-width: 768px) {
+  .modal-backdrop {
+    padding: 12px;
+    align-items: flex-end;
+  }
+
+  .modal-card {
+    padding: 20px 16px;
+    max-height: 85vh;
+    overflow-y: auto;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    margin-bottom: 0;
+  }
+
+  .card {
+    padding: 18px 16px;
+  }
+
+  .btn {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
+  .btn-sm {
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .view-header {
+    flex-direction: column;
+    align-items: flex-start !important;
+    gap: 12px !important;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }

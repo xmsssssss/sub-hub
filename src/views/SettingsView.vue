@@ -595,4 +595,33 @@ onMounted(() => {
   color: var(--text-dim);
   margin-top: 2px;
 }
+
+@media (max-width: 768px) {
+  .backup-banner {
+    padding: 16px 14px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .backup-actions {
+    width: 100%;
+    gap: 8px;
+  }
+
+  .backup-actions .btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .form-row {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .col-4, .col-6 {
+    flex: 1;
+    width: 100%;
+  }
+}
 </style>

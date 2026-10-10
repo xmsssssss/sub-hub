@@ -957,4 +957,46 @@ input:checked + .slider:before {
   padding: 80px 20px;
   color: var(--text-muted);
 }
+
+@media (max-width: 768px) {
+  .subs-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .filter-group {
+    flex: 1;
+    min-width: 140px;
+  }
+
+  .sort-select {
+    width: 100%;
+  }
+
+  .header-actions .btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .sub-card {
+    padding: 16px 14px;
+  }
+
+  .sub-footer {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .sub-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
 </style>
