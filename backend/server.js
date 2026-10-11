@@ -346,6 +346,12 @@ app.post('/api/nodes/import-raw', authMiddleware, (req, res) => {
   });
 
   db.setSubscriptionNodes(sub.id, nodes);
+  const updatedSub = db.updateSubscription(sub.id, {
+    nodeCount: nodes.length,
+    lastStatus: 'updating',
+    lastMessage: `已导入 ${nodes.length} 个节点，正在自动测速...`
+  });
+  broadcast('subscription_updated', { id: sub.id, sub: updatedSub });
 
   // 导入订阅后，自动测试节点延迟：成功则加入整合订阅，失败则不加入
   setTimeout(async () => {
@@ -353,20 +359,48 @@ app.post('/api/nodes/import-raw', authMiddleware, (req, res) => {
       const freshNodes = db.getNodes({ subId: sub.id });
       if (!freshNodes || freshNodes.length === 0) return;
       const settings = db.getSettings();
+      const taskId = 'autotest_' + sub.id + '_' + Date.now().toString(36);
+
+      broadcast('test_started', {
+        taskId,
+        subId: sub.id,
+        title: `自动测速: ${sub.name}`,
+        total: freshNodes.length,
+        nodeNames: freshNodes.map(n => n.name)
+      });
+
       const testResults = await tester.testNodes(freshNodes, {
+        taskId,
         testUrl: settings.testUrl,
         timeout: settings.testTimeout,
         concurrency: settings.testConcurrency,
-        maxRetries: 0
+        maxRetries: 2,
+        onProgress: (progress) => {
+          broadcast('test_progress', { taskId, subId: sub.id, ...progress });
+        }
       });
+
       db.updateNodesBatch(testResults);
-      broadcast('nodes_cleaned', { subId: sub.id });
       const aliveCount = testResults.filter(r => r.inCombinedSub).length;
+      const finalSub = db.updateSubscription(sub.id, {
+        nodeCount: freshNodes.length,
+        aliveCount,
+        lastUpdate: new Date().toISOString(),
+        lastStatus: 'success',
+        lastMessage: `同步完成：共 ${freshNodes.length} 节点，${aliveCount} 个可用`
+      });
       db.addLog('info', `手动导入 [${sub.name}] 自动测试完毕：${aliveCount} 个可用节点已自动纳入整合订阅`, { subId: sub.id, aliveCount });
+      broadcast('test_completed', { taskId, subId: sub.id, results: testResults, count: testResults.length });
+      broadcast('subscription_updated', { id: sub.id, sub: finalSub });
     } catch (e) {
       console.error('[Manual Import] Auto test error:', e.message);
+      const fallbackSub = db.updateSubscription(sub.id, {
+        lastStatus: 'success',
+        lastMessage: `已导入 ${nodes.length} 个节点 (自动测速异常: ${e.message})`
+      });
+      broadcast('subscription_updated', { id: sub.id, sub: fallbackSub });
     }
-  }, 800);
+  }, 300);
 
   res.json({ subId: sub.id, count: nodes.length });
 });

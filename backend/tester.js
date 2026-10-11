@@ -143,6 +143,17 @@ class MihomoTester {
       'log-level': 'warning',
       'external-controller': `127.0.0.1:${apiPort}`,
       secret: secret,
+      dns: {
+        enable: true,
+        ipv6: false,
+        'enhanced-mode': 'redir-host',
+        nameserver: [
+          '223.5.5.5',
+          '119.29.29.29',
+          '114.114.114.114',
+          '8.8.8.8'
+        ]
+      },
       proxies: cleanProxies
     };
 
@@ -336,6 +347,9 @@ class MihomoTester {
       if (!startRes || !startRes.ok) {
         throw new Error(`无法启动 Mihomo 内核程序 (${this.mihomoBinary})，原因: ${startRes?.error || '未知错误'}`);
       }
+
+      // 给 Mihomo 预热 500ms，确保内部出站代理通道与 DNS 解析就绪
+      await new Promise(r => setTimeout(r, 500));
 
       // 2. Queue for testing
       const results = [];

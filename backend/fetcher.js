@@ -114,7 +114,7 @@ async function fetchSubscription(subId) {
           testUrl: settings.testUrl,
           timeout: settings.testTimeout,
           concurrency: settings.testConcurrency,
-          maxRetries: 0, // 导入后的自动测速按单次测速判断
+          maxRetries: 2, // 自动测速支持重试 2 次，避免节点初始握手抖动导致误判超时
           onProgress: (progress) => {
             broadcast('test_progress', { taskId, subId, ...progress });
           }
