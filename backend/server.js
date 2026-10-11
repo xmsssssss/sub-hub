@@ -11,7 +11,8 @@ const db = require('./db');
 const { parseUri, parseSubscriptionContent } = require('./parser');
 const tester = require('./tester');
 const generator = require('./generator');
-const { fetchSubscription, fetchAllSubscriptions } = require('./fetcher');
+const fetcher = require('./fetcher');
+const { fetchSubscription, fetchAllSubscriptions } = fetcher;
 const scheduler = require('./scheduler');
 
 const app = express();
@@ -33,6 +34,7 @@ function broadcast(type, payload) {
     }
   });
 }
+fetcher.setBroadcast(broadcast);
 
 // Auth Middleware for protected API routes
 function authMiddleware(req, res, next) {
@@ -436,6 +438,7 @@ app.post('/api/nodes/test-speed', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: '没有需要测速的节点' });
   }
 
+  const sub = subId ? db.getSubscription(subId) : null;
   const taskId = 'test_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
   const settings = db.getSettings();
   const nodeNames = targetNodes.map(n => n.name);
@@ -444,6 +447,7 @@ app.post('/api/nodes/test-speed', authMiddleware, async (req, res) => {
   res.json({
     message: '测速任务已在后台启动',
     taskId,
+    subId,
     total: targetNodes.length,
     nodeNames
   });
@@ -451,6 +455,8 @@ app.post('/api/nodes/test-speed', authMiddleware, async (req, res) => {
   try {
     broadcast('test_started', {
       taskId,
+      subId,
+      title: sub ? `订阅测速: ${sub.name}` : (targetNodes.length === 1 ? `节点测速: ${nodeNames[0]}` : 'Mihomo 并发测速中'),
       total: targetNodes.length,
       nodeNames
     });
@@ -462,17 +468,28 @@ app.post('/api/nodes/test-speed', authMiddleware, async (req, res) => {
       concurrency: settings.testConcurrency,
       maxRetries: Number(maxRetries) || 3, // 手动测速超时时额外自动重试 3 次
       onProgress: (progress) => {
-        broadcast('test_progress', { taskId, ...progress });
+        broadcast('test_progress', { taskId, subId, ...progress });
       }
     });
 
     db.updateNodesBatch(results);
-    broadcast('test_completed', { taskId, results, count: results.length });
     const aliveCount = results.filter(r => r.inCombinedSub).length;
+
+    if (subId) {
+      const finalSub = db.updateSubscription(subId, {
+        aliveCount,
+        lastUpdate: new Date().toISOString(),
+        lastStatus: 'success',
+        lastMessage: `同步完成：共 ${targetNodes.length} 节点，${aliveCount} 个可用`
+      });
+      broadcast('subscription_updated', { id: subId, sub: finalSub });
+    }
+
+    broadcast('test_completed', { taskId, subId, results, count: results.length });
     db.addLog('info', `完成 ${results.length} 个节点的延迟测速 (已自动维护整合状态: ${aliveCount} 个保留在整合订阅中)`);
 
   } catch (err) {
-    broadcast('test_error', { taskId, error: err.message });
+    broadcast('test_error', { taskId, subId, error: err.message });
     db.addLog('error', `测速异常: ${err.message}`);
   }
 });

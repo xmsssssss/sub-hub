@@ -136,7 +136,9 @@
 
           <SubscriptionsView
             v-else-if="currentTab === 'subscriptions'"
+            ref="subsViewRef"
             @view-nodes="handleViewSubNodes"
+            @test-sub="handleStartSpeedTestSub"
             @data-changed="refreshAllData"
           />
 
@@ -305,6 +307,7 @@ const applyTheme = (theme) => {
 const currentTab = ref('dashboard');
 const selectedSubFilter = ref('');
 const nodesViewRef = ref(null);
+const subsViewRef = ref(null);
 
 const stats = reactive({
   totalSubs: 0,
@@ -447,6 +450,32 @@ const handleStartSpeedTest = async (ids) => {
   }
 };
 
+const handleStartSpeedTestSub = async (subId) => {
+  try {
+    const res = await api.post('/nodes/test-speed', { subId });
+    const taskId = res.taskId || 'task_' + Date.now();
+    let task = testTasks.value.find(t => t.id === taskId);
+    if (!task) {
+      task = {
+        id: taskId,
+        subId,
+        status: 'testing',
+        title: '订阅节点测速中',
+        total: res.total || 0,
+        current: 0,
+        percentage: 0,
+        latest: null,
+        retrying: null,
+        closingCountdown: 5,
+        autoCloseTimer: null
+      };
+      testTasks.value.push(task);
+    }
+  } catch (err) {
+    alert(err.message);
+  }
+};
+
 const handleQuickFilter = async () => {
   if (!confirm(`确定过滤并删除所有检测失败的 ${stats.failedNodes} 个节点吗？`)) return;
   try {
@@ -490,23 +519,26 @@ const setupWebSocket = () => {
         let task = testTasks.value.find(t => t.id === taskId);
         const total = data.payload.total || 0;
         const nodeName = data.payload.nodeNames && data.payload.nodeNames.length === 1 ? data.payload.nodeNames[0] : '';
+        const title = data.payload.title || (total === 1 ? (nodeName ? `节点测速: ${nodeName}` : '单个节点测速中') : 'Mihomo 并发测速中');
         if (!task) {
           task = {
             id: taskId,
+            subId: data.payload.subId,
             status: 'testing',
-            title: total === 1 ? (nodeName ? `节点测速: ${nodeName}` : '单个节点测速中') : 'Mihomo 并发测速中',
+            title,
             nodeName,
             total,
             current: 0,
+            percentage: 0,
             latest: null,
             retrying: null,
-            percentage: 0,
             closingCountdown: 5,
             autoCloseTimer: null
           };
           testTasks.value.push(task);
         } else {
           task.total = total || task.total;
+          if (data.payload.title) task.title = data.payload.title;
         }
       } else if (data.type === 'test_progress') {
         const taskId = data.payload.taskId;
@@ -519,8 +551,13 @@ const setupWebSocket = () => {
           task.percentage = task.total ? Math.min(100, Math.round((task.current / task.total) * 100)) : 0;
         }
         // 即时局部更新对应完成测速的单个节点（不刷新整个页面）
-        if (data.payload.latest && nodesViewRef.value?.updateNodeInPlace) {
-          nodesViewRef.value.updateNodeInPlace(data.payload.latest);
+        if (data.payload.latest) {
+          if (nodesViewRef.value?.updateNodeInPlace) {
+            nodesViewRef.value.updateNodeInPlace(data.payload.latest);
+          }
+          if (subsViewRef.value?.updateSubNodeInPlace) {
+            subsViewRef.value.updateSubNodeInPlace(data.payload.latest);
+          }
         }
       } else if (data.type === 'test_completed') {
         const taskId = data.payload.taskId;
@@ -533,8 +570,13 @@ const setupWebSocket = () => {
           startTaskAutoClose(task);
         }
         // 局部更新对应节点数据（不刷新整个页面、不重置分页和滚动条）
-        if (data.payload.results && nodesViewRef.value?.updateNodesInPlace) {
-          nodesViewRef.value.updateNodesInPlace(data.payload.results);
+        if (data.payload.results) {
+          if (nodesViewRef.value?.updateNodesInPlace) {
+            nodesViewRef.value.updateNodesInPlace(data.payload.results);
+          }
+          if (subsViewRef.value?.updateSubNodesInPlace) {
+            subsViewRef.value.updateSubNodesInPlace(data.payload.results);
+          }
         }
         // 静默更新后台统计（不触发全量重载）
         fetchStats();
@@ -552,7 +594,14 @@ const setupWebSocket = () => {
           nodesViewRef.value.clearTestingStates();
         }
         fetchStats();
-      } else if (data.type === 'subscription_updated' || data.type === 'nodes_cleaned') {
+      } else if (data.type === 'subscription_updated') {
+        if (data.payload?.sub && subsViewRef.value?.updateSubInPlace) {
+          subsViewRef.value.updateSubInPlace(data.payload.sub);
+        } else if (subsViewRef.value?.fetchSubs) {
+          subsViewRef.value.fetchSubs();
+        }
+        fetchStats();
+      } else if (data.type === 'nodes_cleaned') {
         refreshAllData();
       }
     } catch (e) {}

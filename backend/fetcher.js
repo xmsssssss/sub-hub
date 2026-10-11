@@ -6,6 +6,18 @@ const tester = require('./tester');
 
 const DEFAULT_USER_AGENT = 'ClashMeta/1.19.31 (Clash.Meta; Linux x86_64)';
 
+let broadcastFn = null;
+function setBroadcast(fn) {
+  broadcastFn = fn;
+}
+function broadcast(type, payload) {
+  if (broadcastFn) {
+    try {
+      broadcastFn(type, payload);
+    } catch (e) {}
+  }
+}
+
 async function fetchSubscription(subId) {
   const sub = db.getSubscription(subId);
   if (!sub) {
@@ -73,39 +85,76 @@ async function fetchSubscription(subId) {
     });
 
     db.setSubscriptionNodes(subId, mergedNodes);
-    db.addLog('info', `订阅 [${sub.name}] 刷新成功，获取到 ${mergedNodes.length} 个节点`, { subId, count: mergedNodes.length });
+    const updatedSub = db.updateSubscription(subId, {
+      nodeCount: mergedNodes.length,
+      lastStatus: 'updating',
+      lastMessage: `已获取 ${mergedNodes.length} 个节点，正在自动测速...`
+    });
+    db.addLog('info', `订阅 [${sub.name}] 刷新成功，获取到 ${mergedNodes.length} 个节点，开始自动测速`, { subId, count: mergedNodes.length });
+    broadcast('subscription_updated', { id: subId, sub: updatedSub });
 
-    // 导入或刷新订阅后，自动测试节点延迟：成功则加入整合订阅，失败则不加入
+    // 导入或刷新订阅后，自动测试节点延迟：成功则加入整合订阅，失败则不加入，并同步该条订阅状态
     setTimeout(async () => {
       try {
         const freshNodes = db.getNodes({ subId });
         if (!freshNodes || freshNodes.length === 0) return;
+        const settings = db.getSettings();
+        const taskId = 'autotest_' + subId + '_' + Date.now().toString(36);
+
+        broadcast('test_started', {
+          taskId,
+          subId,
+          title: `自动测速: ${sub.name}`,
+          total: freshNodes.length,
+          nodeNames: freshNodes.map(n => n.name)
+        });
+
         const testResults = await tester.testNodes(freshNodes, {
+          taskId,
           testUrl: settings.testUrl,
           timeout: settings.testTimeout,
           concurrency: settings.testConcurrency,
-          maxRetries: 0 // 导入后的自动测速按单次测速判断
+          maxRetries: 0, // 导入后的自动测速按单次测速判断
+          onProgress: (progress) => {
+            broadcast('test_progress', { taskId, subId, ...progress });
+          }
         });
+
         db.updateNodesBatch(testResults);
         const aliveCount = testResults.filter(r => r.inCombinedSub).length;
+        const finalSub = db.updateSubscription(subId, {
+          nodeCount: freshNodes.length,
+          aliveCount,
+          lastUpdate: new Date().toISOString(),
+          lastStatus: 'success',
+          lastMessage: `同步完成：共 ${freshNodes.length} 节点，${aliveCount} 个可用`
+        });
         db.addLog('info', `订阅 [${sub.name}] 自动延迟测试完毕：${aliveCount} 个可用节点已自动纳入整合订阅`, { subId, aliveCount });
+        broadcast('test_completed', { taskId, subId, results: testResults, count: testResults.length });
+        broadcast('subscription_updated', { id: subId, sub: finalSub });
       } catch (e) {
         console.error('[Fetcher] Auto-test after refresh error:', e.message);
+        const fallbackSub = db.updateSubscription(subId, {
+          lastStatus: 'success',
+          lastMessage: `已解析 ${mergedNodes.length} 个节点 (自动测速异常: ${e.message})`
+        });
+        broadcast('subscription_updated', { id: subId, sub: fallbackSub });
       }
-    }, 800);
+    }, 300);
 
     return {
       success: true,
       count: mergedNodes.length,
-      message: `成功获取 ${mergedNodes.length} 个节点`
+      message: `成功获取 ${mergedNodes.length} 个节点，正在后台自动测速`
     };
 
   } catch (err) {
     const errorMsg = err.response ? `HTTP ${err.response.status}: ${err.message}` : err.message;
-    db.updateSubscription(subId, {
+    const failedSub = db.updateSubscription(subId, {
       lastStatus: 'failed',
       lastMessage: errorMsg
     });
+    broadcast('subscription_updated', { id: subId, sub: failedSub });
     db.addLog('error', `订阅 [${sub.name}] 刷新失败: ${errorMsg}`, { subId });
     throw new Error(errorMsg);
   }
@@ -127,5 +176,6 @@ async function fetchAllSubscriptions() {
 
 module.exports = {
   fetchSubscription,
-  fetchAllSubscriptions
+  fetchAllSubscriptions,
+  setBroadcast
 };

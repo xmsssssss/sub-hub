@@ -207,7 +207,7 @@
 
     <!-- Add/Edit Subscription Modal -->
     <div v-if="showModal" class="modal-backdrop" @click.self="showModal = false">
-      <div class="modal-card glass">
+      <div :class="['modal-card', 'glass', isEditing ? 'modal-lg' : '']">
         <div class="modal-header">
           <h3>{{ isEditing ? '编辑机场订阅' : '添加新机场订阅' }}</h3>
           <button class="modal-close" @click="showModal = false">×</button>
@@ -235,6 +235,84 @@
               <input type="checkbox" v-model="form.autoRefresh" />
               <span>开启后台定时自动刷新（获取最新节点）</span>
             </label>
+          </div>
+
+          <!-- 编辑模式下展示：该订阅下的节点列表与一键测速 -->
+          <div v-if="isEditing" class="sub-nodes-panel glass-sm">
+            <div class="sub-nodes-panel-header">
+              <div class="sub-nodes-title-wrap">
+                <span class="sub-nodes-title">订阅节点与测速</span>
+                <span class="sub-nodes-stats-badge" v-if="subNodes.length > 0">
+                  共 {{ subNodes.length }} 节点 ({{ subAliveCount }} 可用 / {{ subFailedCount }} 失败 / {{ subUntestedCount }} 未测)
+                </span>
+              </div>
+              <button
+                type="button"
+                class="btn btn-primary btn-sm btn-sub-test"
+                :disabled="subNodesTesting || subNodes.length === 0"
+                @click="testAllSubNodes"
+                title="一键并发测试该订阅下所有节点的延迟"
+              >
+                <RefreshCw v-if="subNodesTesting" :size="13" class="animate-spin" />
+                <Zap v-else :size="13" />
+                <span>{{ subNodesTesting ? '正在并发测速中...' : '一键测试该订阅所有节点' }}</span>
+              </button>
+            </div>
+
+            <div v-if="loadingSubNodes" class="sub-nodes-loading">
+              <Loader2 :size="18" class="animate-spin" />
+              <span>正在获取该订阅节点列表...</span>
+            </div>
+
+            <div v-else-if="subNodes.length === 0" class="sub-nodes-empty">
+              <span>该订阅暂无已解析节点，请保存并同步后查看</span>
+            </div>
+
+            <div v-else class="sub-nodes-scroll-wrap">
+              <table class="sub-nodes-table">
+                <thead>
+                  <tr>
+                    <th>节点名称</th>
+                    <th width="75">协议</th>
+                    <th width="190">服务器 : 端口</th>
+                    <th width="85">整合状态</th>
+                    <th width="95">延迟</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="node in subNodes" :key="node.id">
+                    <td class="sub-node-name-cell">
+                      <span class="sub-node-name" :title="node.name">{{ node.name }}</span>
+                    </td>
+                    <td>
+                      <span :class="['badge', 'badge-' + (node.type || '').toLowerCase()]">
+                        {{ node.type }}
+                      </span>
+                    </td>
+                    <td class="sub-node-server-cell">
+                      <div class="server-host-wrap" :title="node.server + ':' + node.port">
+                        <span class="server-host">{{ node.server }}</span>
+                        <span class="server-port">:{{ node.port }}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span :class="['mini-pill', node.inCombinedSub ? 'pill-in' : 'pill-out']">
+                        {{ node.inCombinedSub ? '整合中' : '未整合' }}
+                      </span>
+                    </td>
+                    <td>
+                      <span v-if="node.delay && node.delay > 0" :class="['delay-badge', getDelayClass(node.delay)]">
+                        {{ node.delay }} ms
+                      </span>
+                      <span v-else-if="node.delay === -1 || node.status === 'failed'" class="delay-badge delay-failed">
+                        超时 / 失败
+                      </span>
+                      <span v-else class="delay-badge delay-untested">未测速</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <div v-if="modalError" class="error-msg">
@@ -296,7 +374,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, watch } from 'vue';
 import {
   Plus,
   Radio,
@@ -305,6 +383,7 @@ import {
   Copy,
   Clock,
   RefreshCw,
+  Zap,
   Eye,
   Edit3,
   Trash2,
@@ -318,11 +397,20 @@ import {
 import api from '../api';
 import { copyToClipboard } from '../utils/clipboard';
 
-const emit = defineEmits(['view-nodes', 'data-changed']);
+const emit = defineEmits(['view-nodes', 'data-changed', 'test-sub']);
 
 const subs = ref([]);
 const loading = ref(false);
 const refreshingId = ref(null);
+
+// 编辑弹窗中的节点与测速状态
+const subNodes = ref([]);
+const loadingSubNodes = ref(false);
+const subNodesTesting = ref(false);
+
+const subAliveCount = computed(() => subNodes.value.filter(n => n.delay && n.delay > 0).length);
+const subFailedCount = computed(() => subNodes.value.filter(n => n.delay === -1 || n.status === 'failed').length);
+const subUntestedCount = computed(() => subNodes.value.filter(n => !n.delay || n.delay === 0).length);
 
 // 视图与排序配置（从本地存储读取记忆）
 const viewMode = ref(localStorage.getItem('sub_view_mode') || 'grid');
@@ -373,6 +461,68 @@ const fetchSubs = async () => {
   }
 };
 
+const loadSubNodes = async (subId) => {
+  if (!subId) {
+    subNodes.value = [];
+    return;
+  }
+  loadingSubNodes.value = true;
+  try {
+    subNodes.value = await api.get(`/nodes?subId=${subId}`);
+  } catch (e) {
+    subNodes.value = [];
+  } finally {
+    loadingSubNodes.value = false;
+  }
+};
+
+const testAllSubNodes = () => {
+  if (!editingId.value || subNodes.value.length === 0) return;
+  subNodesTesting.value = true;
+  emit('test-sub', editingId.value);
+};
+
+const updateSubNodeInPlace = (nodeResult) => {
+  if (!nodeResult || !nodeResult.id || !isEditing.value) return;
+  const target = subNodes.value.find(n => n.id === nodeResult.id);
+  if (target) {
+    if (typeof nodeResult.delay === 'number') target.delay = nodeResult.delay;
+    if (nodeResult.status) target.status = nodeResult.status;
+    if (nodeResult.inCombinedSub !== undefined) target.inCombinedSub = Boolean(nodeResult.inCombinedSub);
+    if (nodeResult.lastTestTime) target.lastTestTime = nodeResult.lastTestTime;
+  }
+};
+
+const updateSubNodesInPlace = (resultsList) => {
+  if (!Array.isArray(resultsList) || !isEditing.value) return;
+  const map = new Map(resultsList.map(r => [r.id, r]));
+  for (let i = 0; i < subNodes.value.length; i++) {
+    const n = subNodes.value[i];
+    const res = map.get(n.id);
+    if (res) {
+      if (typeof res.delay === 'number') n.delay = res.delay;
+      if (res.status) n.status = res.status;
+      if (res.inCombinedSub !== undefined) n.inCombinedSub = Boolean(res.inCombinedSub);
+      if (res.lastTestTime) n.lastTestTime = res.lastTestTime;
+    }
+  }
+  subNodesTesting.value = false;
+};
+
+const updateSubInPlace = (updatedSub) => {
+  if (!updatedSub || !updatedSub.id) return;
+  const idx = subs.value.findIndex(s => s.id === updatedSub.id);
+  if (idx !== -1) {
+    subs.value[idx] = { ...subs.value[idx], ...updatedSub };
+  }
+};
+
+const getDelayClass = (delay) => {
+  if (delay <= 300) return 'delay-fast';
+  if (delay <= 800) return 'delay-medium';
+  return 'delay-slow';
+};
+
 const openAddModal = () => {
   isEditing.value = false;
   editingId.value = null;
@@ -380,6 +530,8 @@ const openAddModal = () => {
   form.url = '';
   form.autoRefresh = true;
   modalError.value = '';
+  subNodes.value = [];
+  subNodesTesting.value = false;
   showModal.value = true;
 };
 
@@ -390,7 +542,9 @@ const openEditModal = (sub) => {
   form.url = sub.url;
   form.autoRefresh = sub.autoRefresh !== false;
   modalError.value = '';
+  subNodesTesting.value = false;
   showModal.value = true;
+  loadSubNodes(sub.id);
 };
 
 const submitSubForm = async () => {
@@ -489,12 +643,18 @@ const formatRelativeTime = (iso) => {
 };
 
 // 监听视图设置保存到本地存储
-import { watch } from 'vue';
 watch(viewMode, (v) => localStorage.setItem('sub_view_mode', v));
 watch(sortOrder, (s) => localStorage.setItem('sub_sort_order', s));
 
 onMounted(() => {
   fetchSubs();
+});
+
+defineExpose({
+  fetchSubs,
+  updateSubInPlace,
+  updateSubNodeInPlace,
+  updateSubNodesInPlace
 });
 </script>
 
@@ -983,6 +1143,208 @@ input:checked + .slider:before {
   gap: 12px;
   padding: 80px 20px;
   color: var(--text-muted);
+}
+
+/* Sub Nodes Panel inside Edit Modal */
+.sub-nodes-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  margin-top: 6px;
+}
+
+.sub-nodes-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.sub-nodes-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sub-nodes-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.sub-nodes-stats-badge {
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+}
+
+.btn-sub-test {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sub-nodes-loading,
+.sub-nodes-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.sub-nodes-scroll-wrap {
+  max-height: 250px;
+  overflow-y: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+}
+
+.sub-nodes-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  text-align: left;
+}
+
+.sub-nodes-table th {
+  background: var(--bg-table-header);
+  padding: 8px 12px;
+  color: var(--text-muted);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.sub-nodes-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: middle;
+}
+
+.sub-nodes-table tr:hover {
+  background: var(--bg-table-hover);
+}
+
+.sub-node-name-cell {
+  max-width: 180px;
+}
+
+.sub-node-name {
+  font-weight: 500;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
+.sub-node-server-cell {
+  max-width: 190px;
+}
+
+.server-host-wrap {
+  display: flex;
+  align-items: center;
+  max-width: 190px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.server-host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  color: #2563eb;
+}
+[data-theme="dark"] .server-host {
+  color: #93c5fd;
+}
+
+.server-port {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+[data-theme="dark"] .server-port {
+  color: #cbd5e1;
+}
+
+.mini-pill {
+  display: inline-flex;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.pill-in {
+  background: rgba(16, 185, 129, 0.15);
+  color: #059669;
+}
+[data-theme="dark"] .pill-in {
+  color: #34d399;
+}
+
+.pill-out {
+  background: var(--bg-card-subtle);
+  color: var(--text-dim);
+  border: 1px solid var(--border-subtle);
+}
+
+.delay-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.delay-fast {
+  color: #059669;
+}
+[data-theme="dark"] .delay-fast {
+  color: #34d399;
+}
+
+.delay-medium {
+  color: #d97706;
+}
+[data-theme="dark"] .delay-medium {
+  color: #fbbf24;
+}
+
+.delay-slow {
+  color: #dc2626;
+}
+[data-theme="dark"] .delay-slow {
+  color: #f87171;
+}
+
+.delay-failed {
+  color: #dc2626;
+  font-size: 10.5px;
+}
+
+.delay-untested {
+  color: var(--text-dim);
+  font-size: 10.5px;
 }
 
 @media (max-width: 768px) {
