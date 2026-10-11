@@ -1,19 +1,30 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const net = require('net');
 const { spawn } = require('child_process');
 const yaml = require('yaml');
 
 class MihomoTester {
   constructor() {
-    this.process = null;
+    this.activeTasks = new Map();
     this.configDir = path.join(__dirname, '..', 'data', 'temp_mihomo');
-    this.configFile = path.join(this.configDir, 'config.yaml');
-    this.apiPort = 29090;
-    this.mixedPort = 27890;
-    this.secret = 'mihomo_sub_test_' + Math.random().toString(36).substring(2, 8);
-    this.isTesting = false;
     this.mihomoBinary = this.findBinary();
+  }
+
+  get isTesting() {
+    return this.activeTasks.size > 0;
+  }
+
+  getFreePort() {
+    return new Promise((resolve, reject) => {
+      const srv = net.createServer();
+      srv.listen(0, '127.0.0.1', () => {
+        const port = srv.address().port;
+        srv.close(() => resolve(port));
+      });
+      srv.on('error', reject);
+    });
   }
 
   findBinary() {
@@ -88,28 +99,38 @@ class MihomoTester {
     // 优先使用 /tmp/temp_mihomo 或系统临时目录，避免 Docker volume 目录由于宿主机挂载文件权限 umask 导致不可执行或写锁冲突
     if (process.platform !== 'win32') {
       this.configDir = '/tmp/sub_temp_mihomo';
-      this.configFile = path.join(this.configDir, 'config.yaml');
     }
     if (!fs.existsSync(this.configDir)) {
       fs.mkdirSync(this.configDir, { recursive: true });
     }
   }
 
-  async stopMihomo() {
-    if (this.process) {
+  async stopMihomoTask(taskId) {
+    const task = this.activeTasks.get(taskId);
+    if (task) {
+      if (task.proc) {
+        try {
+          task.proc.kill('SIGTERM');
+          await new Promise(r => setTimeout(r, 200));
+          task.proc.kill('SIGKILL');
+        } catch (e) {}
+      }
       try {
-        this.process.kill('SIGTERM');
-        await new Promise(r => setTimeout(r, 400));
-        if (this.process) {
-          this.process.kill('SIGKILL');
+        if (task.configFile && fs.existsSync(task.configFile)) {
+          fs.unlinkSync(task.configFile);
         }
       } catch (e) {}
-      this.process = null;
+      this.activeTasks.delete(taskId);
     }
   }
 
-  async startMihomoWithNodes(nodes) {
-    await this.stopMihomo();
+  async stopMihomo() {
+    for (const taskId of Array.from(this.activeTasks.keys())) {
+      await this.stopMihomoTask(taskId);
+    }
+  }
+
+  async startMihomoWithNodes(nodes, { taskId, apiPort, secret, configFile }) {
     this.ensureTempDir();
 
     const cleanProxies = nodes.map(n => this.cleanProxyForMihomo(n));
@@ -120,12 +141,12 @@ class MihomoTester {
       'allow-lan': false,
       mode: 'rule',
       'log-level': 'warning',
-      'external-controller': `127.0.0.1:${this.apiPort}`,
-      secret: this.secret,
+      'external-controller': `127.0.0.1:${apiPort}`,
+      secret: secret,
       proxies: cleanProxies
     };
 
-    fs.writeFileSync(this.configFile, yaml.stringify(configData), 'utf8');
+    fs.writeFileSync(configFile, yaml.stringify(configData), 'utf8');
 
     return new Promise((resolve) => {
       let started = false;
@@ -137,9 +158,10 @@ class MihomoTester {
       }, 7000);
 
       try {
-        this.process = spawn(this.mihomoBinary, ['-d', this.configDir, '-f', this.configFile]);
+        const proc = spawn(this.mihomoBinary, ['-d', this.configDir, '-f', configFile]);
+        this.activeTasks.set(taskId, { proc, configFile, apiPort, secret });
 
-        this.process.stdout.on('data', d => {
+        proc.stdout.on('data', d => {
           const str = d.toString();
           if (str.includes('RESTful API listening at') || str.includes('Initial configuration complete')) {
             if (!started) {
@@ -150,7 +172,7 @@ class MihomoTester {
           }
         });
 
-        this.process.stderr.on('data', d => {
+        proc.stderr.on('data', d => {
           const str = d.toString();
           console.error('[Mihomo stderr]:', str);
           lastError = str.trim();
@@ -163,7 +185,7 @@ class MihomoTester {
           }
         });
 
-        this.process.on('error', err => {
+        proc.on('error', err => {
           console.error('[Mihomo] Process spawn error:', err.message);
           lastError = err.message;
           if (!started) {
@@ -173,14 +195,14 @@ class MihomoTester {
           }
         });
 
-        this.process.on('exit', (code, signal) => {
-          console.warn(`[Mihomo] Process exited with code ${code}, signal ${signal}`);
+        proc.on('exit', (code, signal) => {
+          console.warn(`[Mihomo] Task ${taskId} exited with code ${code}, signal ${signal}`);
           if (!started) {
             started = true;
             clearTimeout(timeout);
             resolve({ ok: false, error: lastError || `进程启动后异常退出 (退出码: ${code}, 信号: ${signal})` });
           }
-          this.process = null;
+          this.activeTasks.delete(taskId);
         });
 
         // Also polling health check
@@ -189,14 +211,14 @@ class MihomoTester {
             clearInterval(interval);
             return;
           }
-          const ok = await this.pingApi();
+          const ok = await this.pingApi(apiPort, secret);
           if (ok) {
             started = true;
             clearInterval(interval);
             clearTimeout(timeout);
             resolve({ ok: true });
           }
-        }, 300);
+        }, 200);
 
       } catch (err) {
         clearTimeout(timeout);
@@ -205,10 +227,10 @@ class MihomoTester {
     });
   }
 
-  pingApi() {
+  pingApi(apiPort, secret) {
     return new Promise(resolve => {
-      const req = http.request(`http://127.0.0.1:${this.apiPort}/version`, {
-        headers: { 'Authorization': `Bearer ${this.secret}` },
+      const req = http.request(`http://127.0.0.1:${apiPort}/version`, {
+        headers: { 'Authorization': `Bearer ${secret}` },
         timeout: 1000
       }, res => {
         resolve(res.statusCode === 200);
@@ -222,13 +244,13 @@ class MihomoTester {
     });
   }
 
-  testSingleProxyDelay(proxyName, testUrl = 'http://www.gstatic.com/generate_204', timeout = 5000) {
+  testSingleProxyDelay(proxyName, testUrl = 'http://www.gstatic.com/generate_204', timeout = 5000, apiPort = 29090, secret = '') {
     return new Promise(resolve => {
       const encodedName = encodeURIComponent(proxyName);
-      const url = `http://127.0.0.1:${this.apiPort}/proxies/${encodedName}/delay?url=${encodeURIComponent(testUrl)}&timeout=${timeout}`;
+      const url = `http://127.0.0.1:${apiPort}/proxies/${encodedName}/delay?url=${encodeURIComponent(testUrl)}&timeout=${timeout}`;
 
       const req = http.request(url, {
-        headers: { 'Authorization': `Bearer ${this.secret}` },
+        headers: { 'Authorization': `Bearer ${secret}` },
         timeout: timeout + 1500
       }, res => {
         let body = '';
@@ -258,8 +280,8 @@ class MihomoTester {
   /**
    * Test single proxy with optional automatic retries on failure
    */
-  async testSingleProxyWithRetry(proxyName, testUrl = 'http://www.gstatic.com/generate_204', timeout = 5000, maxRetries = 0, onRetry = null) {
-    let delay = await this.testSingleProxyDelay(proxyName, testUrl, timeout);
+  async testSingleProxyWithRetry(proxyName, testUrl = 'http://www.gstatic.com/generate_204', timeout = 5000, maxRetries = 0, onRetry = null, apiPort = 29090, secret = '') {
+    let delay = await this.testSingleProxyDelay(proxyName, testUrl, timeout, apiPort, secret);
     if (delay > 0) {
       return { delay, retriesUsed: 0 };
     }
@@ -269,7 +291,7 @@ class MihomoTester {
       if (onRetry) onRetry(proxyName, r, maxRetries);
       // Brief pause between retries
       await new Promise(res => setTimeout(res, 250));
-      delay = await this.testSingleProxyDelay(proxyName, testUrl, timeout);
+      delay = await this.testSingleProxyDelay(proxyName, testUrl, timeout, apiPort, secret);
       if (delay > 0) {
         return { delay, retriesUsed: r };
       }
@@ -281,15 +303,17 @@ class MihomoTester {
   /**
    * Run speed / delay test in batches with concurrency limit
    */
-  async testNodes(nodes, { testUrl = 'http://www.gstatic.com/generate_204', timeout = 5000, concurrency = 10, maxRetries = 0, onProgress = null } = {}) {
-    if (this.isTesting) {
-      throw new Error('当前正在进行延迟测试，请稍候...');
-    }
+  async testNodes(nodes, { taskId, testUrl = 'http://www.gstatic.com/generate_204', timeout = 5000, concurrency = 10, maxRetries = 0, onProgress = null } = {}) {
     if (!nodes || nodes.length === 0) {
       return [];
     }
 
-    this.isTesting = true;
+    const currentTaskId = taskId || 'task_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+    this.ensureTempDir();
+    const apiPort = await this.getFreePort();
+    const secret = 'mihomo_sub_test_' + Math.random().toString(36).substring(2, 8);
+    const configFile = path.join(this.configDir, `config_${currentTaskId}.yaml`);
+
     try {
       // 确保二进制文件拥有可执行权限 (针对 Linux / Docker 运行时)
       if (process.platform !== 'win32' && fs.existsSync(this.mihomoBinary)) {
@@ -302,7 +326,13 @@ class MihomoTester {
       const uniqueNamedNodes = this.ensureUniqueNodeNames(nodes);
 
       // 1. Start mihomo instance loaded with these nodes
-      const startRes = await this.startMihomoWithNodes(uniqueNamedNodes);
+      const startRes = await this.startMihomoWithNodes(uniqueNamedNodes, {
+        taskId: currentTaskId,
+        apiPort,
+        secret,
+        configFile
+      });
+
       if (!startRes || !startRes.ok) {
         throw new Error(`无法启动 Mihomo 内核程序 (${this.mihomoBinary})，原因: ${startRes?.error || '未知错误'}`);
       }
@@ -329,7 +359,9 @@ class MihomoTester {
                   retrying: { name, currentRetry, totalRetries }
                 });
               }
-            }
+            },
+            apiPort,
+            secret
           );
 
           const delay = testRes.delay;
@@ -365,12 +397,7 @@ class MihomoTester {
       return results;
 
     } finally {
-      this.isTesting = false;
-      await this.stopMihomo();
-      // Clean temporary directory config
-      try {
-        if (fs.existsSync(this.configFile)) fs.unlinkSync(this.configFile);
-      } catch (e) {}
+      await this.stopMihomoTask(currentTaskId);
     }
   }
 }

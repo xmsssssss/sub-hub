@@ -202,11 +202,12 @@ app.post('/api/subscriptions', authMiddleware, async (req, res) => {
 
   if (urlLines.length === 1) {
     const singleUrl = urlLines[0];
-    const existing = db.findSubscriptionByUrl(singleUrl);
+    const targetIp = await db.resolveSubscriptionIp(singleUrl);
+    const existing = targetIp ? db.findSubscriptionByIp(targetIp) : db.findSubscriptionByUrl(singleUrl);
     if (existing) {
       return res.json({
         skipped: true,
-        message: `该订阅地址已存在（名称：${existing.name}），已自动跳过重复添加`,
+        message: `该订阅地址 IP（${targetIp || singleUrl}）已存在（名称：${existing.name}），已自动跳过重复添加`,
         ...existing
       });
     }
@@ -215,6 +216,7 @@ app.post('/api/subscriptions', authMiddleware, async (req, res) => {
     const newSub = db.addSubscription({
       name: finalName,
       url: singleUrl,
+      ip: targetIp,
       enabled,
       autoRefresh
     });
@@ -233,14 +235,25 @@ app.post('/api/subscriptions', authMiddleware, async (req, res) => {
   }
 
   // Multiple URLs handling
+  const resolvedList = await Promise.all(urlLines.map(async (u) => {
+    const ip = await db.resolveSubscriptionIp(u);
+    return { url: u, ip };
+  }));
+
   const addedSubs = [];
   let skippedCount = 0;
-  for (let i = 0; i < urlLines.length; i++) {
-    const u = urlLines[i];
-    const existing = db.findSubscriptionByUrl(u);
+  const seenBatchIps = new Set();
+
+  for (let i = 0; i < resolvedList.length; i++) {
+    const { url: u, ip: targetIp } = resolvedList[i];
+    const existing = (targetIp && (db.findSubscriptionByIp(targetIp) || seenBatchIps.has(targetIp.toLowerCase())))
+      || (!targetIp && db.findSubscriptionByUrl(u));
     if (existing) {
       skippedCount++;
       continue;
+    }
+    if (targetIp) {
+      seenBatchIps.add(targetIp.toLowerCase());
     }
     const finalName = (name && name.trim())
       ? `${name.trim()} (${i + 1})`
@@ -249,6 +262,7 @@ app.post('/api/subscriptions', authMiddleware, async (req, res) => {
     const created = db.addSubscription({
       name: finalName,
       url: u,
+      ip: targetIp,
       enabled,
       autoRefresh
     });
@@ -262,12 +276,16 @@ app.post('/api/subscriptions', authMiddleware, async (req, res) => {
     batch: true,
     addedCount: addedSubs.length,
     skippedCount,
-    message: `添加完成：成功新增 ${addedSubs.length} 个订阅，自动跳过 ${skippedCount} 个重复订阅`
+    message: `添加完成：成功新增 ${addedSubs.length} 个订阅，自动跳过 ${skippedCount} 个重复订阅（相同IP）`
   });
 });
 
-app.put('/api/subscriptions/:id', authMiddleware, (req, res) => {
-  const updated = db.updateSubscription(req.params.id, req.body);
+app.put('/api/subscriptions/:id', authMiddleware, async (req, res) => {
+  const updates = { ...req.body };
+  if (updates.url) {
+    updates.ip = await db.resolveSubscriptionIp(updates.url);
+  }
+  const updated = db.updateSubscription(req.params.id, updates);
   if (!updated) return res.status(404).json({ error: '订阅不存在' });
   res.json(updated);
 });
@@ -400,12 +418,8 @@ app.post('/api/nodes/deduplicate', authMiddleware, (req, res) => {
   res.json(result);
 });
 
-// Latency Speed Test (手动测速支持重试 3 次，失败则踢出整合订阅)
+// Latency Speed Test (手动测速支持重试 3 次，失败则踢出整合订阅，支持多任务并发)
 app.post('/api/nodes/test-speed', authMiddleware, async (req, res) => {
-  if (tester.isTesting) {
-    return res.status(400).json({ error: '测速任务正在进行中，请等待完成' });
-  }
-
   const { ids, subId, maxRetries = 3 } = req.body;
   let targetNodes = [];
 
@@ -422,36 +436,43 @@ app.post('/api/nodes/test-speed', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: '没有需要测速的节点' });
   }
 
+  const taskId = 'test_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
   const settings = db.getSettings();
+  const nodeNames = targetNodes.map(n => n.name);
 
   // Respond immediately and run in background with WebSocket broadcasts
   res.json({
     message: '测速任务已在后台启动',
-    total: targetNodes.length
+    taskId,
+    total: targetNodes.length,
+    nodeNames
   });
 
   try {
-    broadcast('test_started', { total: targetNodes.length });
+    broadcast('test_started', {
+      taskId,
+      total: targetNodes.length,
+      nodeNames
+    });
 
-    const batchUpdates = [];
     const results = await tester.testNodes(targetNodes, {
+      taskId,
       testUrl: settings.testUrl,
       timeout: settings.testTimeout,
       concurrency: settings.testConcurrency,
       maxRetries: Number(maxRetries) || 3, // 手动测速超时时额外自动重试 3 次
       onProgress: (progress) => {
-        batchUpdates.push(progress.latest);
-        broadcast('test_progress', progress);
+        broadcast('test_progress', { taskId, ...progress });
       }
     });
 
     db.updateNodesBatch(results);
-    broadcast('test_completed', { results, count: results.length });
+    broadcast('test_completed', { taskId, results, count: results.length });
     const aliveCount = results.filter(r => r.inCombinedSub).length;
     db.addLog('info', `完成 ${results.length} 个节点的延迟测速 (已自动维护整合状态: ${aliveCount} 个保留在整合订阅中)`);
 
   } catch (err) {
-    broadcast('test_error', { error: err.message });
+    broadcast('test_error', { taskId, error: err.message });
     db.addLog('error', `测速异常: ${err.message}`);
   }
 });

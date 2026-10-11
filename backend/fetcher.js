@@ -18,6 +18,15 @@ async function fetchSubscription(subId) {
       lastMessage: '正在请求订阅服务器...'
     });
 
+    if (!sub.ip && sub.url) {
+      try {
+        const resolvedIp = await db.resolveSubscriptionIp(sub.url);
+        if (resolvedIp) {
+          db.updateSubscription(subId, { ip: resolvedIp });
+        }
+      } catch (e) {}
+    }
+
     const response = await axios.get(sub.url, {
       timeout: 15000,
       headers: {

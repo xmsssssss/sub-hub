@@ -99,9 +99,9 @@
           </div>
 
           <div class="header-right">
-            <div class="status-pill cursor-pointer" v-if="isTesting" @click="showTestModal = !showTestModal" title="点击展开/收起测速详情气泡">
+            <div class="status-pill" v-if="isTesting" title="测速任务进行中">
               <span class="pulse-dot"></span>
-              <span class="status-pill-text">测速中: {{ testProgress.current }}/{{ testProgress.total }}</span>
+              <span class="status-pill-text">测速中: {{ activeTestingSummary }}</span>
             </div>
 
             <!-- Theme Toggle Button (Light by default) -->
@@ -145,7 +145,7 @@
             ref="nodesViewRef"
             :initialSubId="selectedSubFilter"
             :isTesting="isTesting"
-            :testProgress="testProgress"
+            :testProgress="latestTestProgress"
             @start-test="handleStartSpeedTest"
             @data-changed="refreshAllData"
           />
@@ -163,59 +163,80 @@
       </main>
     </div>
 
-    <!-- Live Speed Test Floating Widget (右下角精致悬浮动态气泡，不遮挡页面) -->
-    <transition name="slide-up">
-      <div v-if="showTestModal || isTesting" class="test-floating-card glass">
-        <div class="test-card-header">
-          <div class="test-header-left">
-            <Activity :size="16" class="text-primary animate-pulse" />
-            <span class="test-header-title">{{ isTesting ? 'Mihomo 并发测速中' : '测速完成' }}</span>
-          </div>
-          <div class="test-header-actions">
-            <button class="test-icon-btn" title="最小化/关闭" @click="showTestModal = false">×</button>
-          </div>
-        </div>
-
-        <div class="test-card-body">
-          <div class="test-stats-row">
-            <div class="test-stat-item">
-              <span class="label">进度</span>
-              <span class="val">{{ testProgress.current }} / {{ testProgress.total }}</span>
+    <!-- Live Speed Test Floating Widget Stack (右下角多任务并发气泡堆栈，新任务在下，旧任务依次往上推) -->
+    <div class="test-floating-container" v-if="testTasks.length > 0">
+      <transition-group name="test-stack">
+        <div
+          v-for="task in testTasks"
+          :key="task.id"
+          class="test-floating-card glass"
+          :class="['task-' + task.status]"
+        >
+          <div class="test-card-header">
+            <div class="test-header-left">
+              <CheckCircle v-if="task.status === 'completed'" :size="16" class="text-success" />
+              <AlertCircle v-else-if="task.status === 'error'" :size="16" class="text-danger" />
+              <Activity v-else :size="16" class="text-primary animate-pulse" />
+              <span class="test-header-title">{{ task.title }}</span>
             </div>
-            <div class="test-stat-item">
-              <span class="label">完成比例</span>
-              <span class="val text-primary">{{ testPercentage }}%</span>
-            </div>
-            <div class="test-stat-item">
-              <span class="label">状态</span>
-              <span class="val">{{ isTesting ? '测试中' : '已就绪' }}</span>
-            </div>
-          </div>
-
-          <!-- Progress Bar -->
-          <div class="progress-container">
-            <div class="progress-fill" :style="{ width: testPercentage + '%' }"></div>
-          </div>
-
-          <!-- Latest test node line -->
-          <div class="latest-tested-box" v-if="testProgress.latest || testProgress.retrying">
-            <div class="latest-label">{{ testProgress.retrying ? '节点超时重试中：' : '最新测速节点：' }}</div>
-            <div class="latest-row" v-if="testProgress.retrying">
-              <span class="latest-name">{{ testProgress.retrying.name }}</span>
-              <span class="latest-delay text-warning">
-                重试第 {{ testProgress.retrying.currentRetry }}/{{ testProgress.retrying.totalRetries }} 次
+            <div class="test-header-actions">
+              <span v-if="task.status === 'completed'" class="autoclose-tag">
+                {{ task.closingCountdown }}s 后自动关闭
               </span>
-            </div>
-            <div class="latest-row" v-else-if="testProgress.latest">
-              <span class="latest-name">{{ testProgress.latest.name }}</span>
-              <span :class="['latest-delay', testProgress.latest.delay > 0 ? 'text-success' : 'text-danger']">
-                {{ testProgress.latest.delay > 0 ? `${testProgress.latest.delay} ms` : '超时/移出' }}
-              </span>
+              <button class="test-icon-btn" title="关闭" @click="closeTask(task.id)">×</button>
             </div>
           </div>
+
+          <div class="test-card-body">
+            <div class="test-stats-row">
+              <div class="test-stat-item">
+                <span class="label">进度</span>
+                <span class="val">{{ task.current }} / {{ task.total }}</span>
+              </div>
+              <div class="test-stat-item">
+                <span class="label">完成比例</span>
+                <span class="val text-primary">{{ task.percentage }}%</span>
+              </div>
+              <div class="test-stat-item">
+                <span class="label">状态</span>
+                <span :class="['val', task.status === 'completed' ? 'text-success' : task.status === 'error' ? 'text-danger' : '']">
+                  {{ task.status === 'completed' ? '已完成' : task.status === 'error' ? '异常' : '测试中' }}
+                </span>
+              </div>
+            </div>
+
+            <!-- Progress Bar -->
+            <div class="progress-container">
+              <div
+                class="progress-fill"
+                :class="{ 'bg-success': task.status === 'completed', 'bg-danger': task.status === 'error' }"
+                :style="{ width: task.percentage + '%' }"
+              ></div>
+            </div>
+
+            <!-- Latest test node line -->
+            <div class="latest-tested-box" v-if="task.latest || task.retrying">
+              <div class="latest-label">{{ task.retrying ? '节点超时重试中：' : '最新测速节点：' }}</div>
+              <div class="latest-row" v-if="task.retrying">
+                <span class="latest-name">{{ task.retrying.name }}</span>
+                <span class="latest-delay text-warning">
+                  重试第 {{ task.retrying.currentRetry }}/{{ task.retrying.totalRetries }} 次
+                </span>
+              </div>
+              <div class="latest-row" v-else-if="task.latest">
+                <span class="latest-name">{{ task.latest.name }}</span>
+                <span :class="['latest-delay', task.latest.delay > 0 ? 'text-success' : 'text-danger']">
+                  {{ task.latest.delay > 0 ? `${task.latest.delay} ms` : '超时/移出' }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Auto-close visual countdown line (5s) -->
+          <div v-if="task.status === 'completed'" class="autoclose-timer-bar"></div>
         </div>
-      </div>
-    </transition>
+      </transition-group>
+    </div>
   </div>
 </template>
 
@@ -232,6 +253,8 @@ import {
   LogOut,
   RefreshCw,
   Activity,
+  CheckCircle,
+  AlertCircle,
   Sun,
   Moon,
   Menu,
@@ -293,12 +316,26 @@ const stats = reactive({
   protocols: {}
 });
 
-const isTesting = ref(false);
-const showTestModal = ref(false);
-const testProgress = reactive({
-  current: 0,
-  total: 0,
-  latest: null
+// 多任务并发测速气泡堆栈 (依次往上推)
+const testTasks = ref([]);
+
+const isTesting = computed(() => testTasks.value.some(t => t.status === 'testing'));
+
+const activeTestingSummary = computed(() => {
+  const active = testTasks.value.filter(t => t.status === 'testing');
+  if (active.length === 0) return '';
+  if (active.length === 1) {
+    return `${active[0].current}/${active[0].total}`;
+  }
+  return `${active.length} 个任务`;
+});
+
+const latestTestProgress = computed(() => {
+  const active = testTasks.value.filter(t => t.status === 'testing');
+  if (active.length > 0) {
+    return active[active.length - 1];
+  }
+  return { current: 0, total: 0 };
 });
 
 const isRefreshingData = ref(false);
@@ -312,10 +349,28 @@ const tabNames = {
   settings: '系统配置'
 };
 
-const testPercentage = computed(() => {
-  if (!testProgress.total) return 0;
-  return Math.min(100, Math.round((testProgress.current / testProgress.total) * 100));
-});
+const closeTask = (id) => {
+  const idx = testTasks.value.findIndex(t => t.id === id);
+  if (idx !== -1) {
+    if (testTasks.value[idx].autoCloseTimer) {
+      clearInterval(testTasks.value[idx].autoCloseTimer);
+    }
+    testTasks.value.splice(idx, 1);
+  }
+};
+
+const startTaskAutoClose = (task) => {
+  if (task.autoCloseTimer) clearInterval(task.autoCloseTimer);
+  task.closingCountdown = 5;
+  task.autoCloseTimer = setInterval(() => {
+    task.closingCountdown--;
+    if (task.closingCountdown <= 0) {
+      clearInterval(task.autoCloseTimer);
+      task.autoCloseTimer = null;
+      closeTask(task.id);
+    }
+  }, 1000);
+};
 
 const handleLoginSuccess = (res) => {
   isLoggedIn.value = true;
@@ -334,9 +389,6 @@ const fetchStats = async () => {
   try {
     const data = await api.get('/dashboard/stats');
     Object.assign(stats, data);
-    if (typeof data.isTesting === 'boolean') {
-      isTesting.value = data.isTesting;
-    }
   } catch (e) {}
 };
 
@@ -371,11 +423,25 @@ const handleStartSpeedTest = async (ids) => {
   try {
     const payload = Array.isArray(ids) ? { ids } : {};
     const res = await api.post('/nodes/test-speed', payload);
-    isTesting.value = true;
-    testProgress.current = 0;
-    testProgress.total = res.total || 0;
-    testProgress.latest = null;
-    showTestModal.value = true;
+    const taskId = res.taskId || 'task_' + Date.now();
+    const nodeName = res.nodeNames && res.nodeNames.length === 1 ? res.nodeNames[0] : '';
+    let task = testTasks.value.find(t => t.id === taskId);
+    if (!task) {
+      task = {
+        id: taskId,
+        status: 'testing',
+        title: res.total === 1 ? (nodeName ? `节点测速: ${nodeName}` : '单个节点测速中') : 'Mihomo 并发测速中',
+        nodeName,
+        total: res.total || 0,
+        current: 0,
+        percentage: 0,
+        latest: null,
+        retrying: null,
+        closingCountdown: 5,
+        autoCloseTimer: null
+      };
+      testTasks.value.push(task);
+    }
   } catch (err) {
     alert(err.message);
   }
@@ -420,21 +486,59 @@ const setupWebSocket = () => {
     try {
       const data = JSON.parse(event.data);
       if (data.type === 'test_started') {
-        isTesting.value = true;
-        testProgress.total = data.payload.total;
-        testProgress.current = 0;
+        const taskId = data.payload.taskId || 'task_' + Date.now();
+        let task = testTasks.value.find(t => t.id === taskId);
+        const total = data.payload.total || 0;
+        const nodeName = data.payload.nodeNames && data.payload.nodeNames.length === 1 ? data.payload.nodeNames[0] : '';
+        if (!task) {
+          task = {
+            id: taskId,
+            status: 'testing',
+            title: total === 1 ? (nodeName ? `节点测速: ${nodeName}` : '单个节点测速中') : 'Mihomo 并发测速中',
+            nodeName,
+            total,
+            current: 0,
+            latest: null,
+            retrying: null,
+            percentage: 0,
+            closingCountdown: 5,
+            autoCloseTimer: null
+          };
+          testTasks.value.push(task);
+        } else {
+          task.total = total || task.total;
+        }
       } else if (data.type === 'test_progress') {
-        isTesting.value = true;
-        testProgress.current = data.payload.current;
-        testProgress.total = data.payload.total;
-        testProgress.latest = data.payload.latest;
-        testProgress.retrying = data.payload.retrying;
+        const taskId = data.payload.taskId;
+        let task = taskId ? testTasks.value.find(t => t.id === taskId) : testTasks.value[testTasks.value.length - 1];
+        if (task) {
+          task.current = data.payload.current;
+          task.total = data.payload.total || task.total;
+          task.latest = data.payload.latest;
+          task.retrying = data.payload.retrying;
+          task.percentage = task.total ? Math.min(100, Math.round((task.current / task.total) * 100)) : 0;
+        }
       } else if (data.type === 'test_completed') {
-        isTesting.value = false;
+        const taskId = data.payload.taskId;
+        let task = taskId ? testTasks.value.find(t => t.id === taskId) : testTasks.value.find(t => t.status === 'testing');
+        if (task) {
+          task.status = 'completed';
+          task.current = task.total;
+          task.percentage = 100;
+          task.title = task.total === 1 ? '节点测速完成' : '并发测速完成';
+          startTaskAutoClose(task);
+        }
         refreshAllData();
       } else if (data.type === 'test_error') {
-        isTesting.value = false;
-        alert('测速失败: ' + (data.payload?.error || 'Mihomo 内核启动或执行异常'));
+        const taskId = data.payload.taskId;
+        let task = taskId ? testTasks.value.find(t => t.id === taskId) : testTasks.value.find(t => t.status === 'testing');
+        if (task) {
+          task.status = 'error';
+          task.title = '测速异常: ' + (data.payload?.error || '执行失败');
+          startTaskAutoClose(task);
+        } else {
+          alert('测速失败: ' + (data.payload?.error || 'Mihomo 内核启动或执行异常'));
+        }
         refreshAllData();
       } else if (data.type === 'subscription_updated' || data.type === 'nodes_cleaned') {
         refreshAllData();
@@ -692,20 +796,35 @@ onMounted(() => {
   padding: 28px 32px;
 }
 
-/* Speedtest Floating Widget (右下角优雅悬浮气泡) */
-.test-floating-card {
+/* Speedtest Floating Widget Stack (右下角优雅悬浮气泡，新任务在下，旧任务依次往上推) */
+.test-floating-container {
   position: fixed;
   right: 28px;
   bottom: 28px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 14px;
+  pointer-events: none;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 6px;
+}
+
+.test-floating-card {
+  position: relative;
   width: 360px;
   max-width: calc(100vw - 40px);
-  z-index: 9999;
   border-radius: 16px;
-  box-shadow: 0 16px 36px -4px rgba(15, 23, 42, 0.2), 0 0 0 1px var(--border-color);
-  padding: 18px 20px;
+  box-shadow: 0 16px 36px -4px rgba(15, 23, 42, 0.22), 0 0 0 1px var(--border-color);
+  padding: 16px 18px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
+  pointer-events: auto;
+  overflow: hidden;
+  background: var(--bg-card);
 }
 
 .test-card-header {
@@ -724,6 +843,49 @@ onMounted(() => {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-main);
+}
+
+.test-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.autoclose-tag {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-subtle);
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+}
+
+.autoclose-timer-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: var(--success, #10b981);
+  width: 100%;
+  animation: timer-drain 5s linear forwards;
+}
+
+@keyframes timer-drain {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
+.bg-success {
+  background: var(--success, #10b981) !important;
+}
+
+.bg-danger {
+  background: var(--danger, #ef4444) !important;
 }
 
 .test-icon-btn {
@@ -827,16 +989,27 @@ onMounted(() => {
   font-size: 12px;
 }
 
-/* Slide up animation for floating widget */
-.slide-up-enter-active,
-.slide-up-leave-active {
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+/* Stack animation: 进入时从下方浮现并向上推，离开时向右平滑滑出并淡出 */
+.test-stack-enter-active {
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.slide-up-enter-from,
-.slide-up-leave-to {
+.test-stack-leave-active {
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.test-stack-move {
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.test-stack-enter-from {
   opacity: 0;
-  transform: translateY(24px) scale(0.96);
+  transform: translateY(28px) scale(0.95);
+}
+
+.test-stack-leave-to {
+  opacity: 0;
+  transform: translateX(60px) scale(0.92);
 }
 
 .cursor-pointer {
@@ -939,11 +1112,15 @@ onMounted(() => {
     white-space: nowrap;
   }
 
-  .test-floating-card {
+  .test-floating-container {
     right: 12px;
     bottom: 12px;
     left: 12px;
-    width: auto;
+    max-height: 80vh;
+  }
+
+  .test-floating-card {
+    width: 100%;
     max-width: none;
     padding: 14px 16px;
   }

@@ -69,6 +69,9 @@
         <div class="sub-card-top">
           <div class="sub-meta">
             <span class="sub-name">{{ sub.name }}</span>
+            <span v-if="sub.ip" class="sub-ip-badge" :title="'订阅地址IP: ' + sub.ip">
+              {{ sub.ip }}
+            </span>
             <span class="node-count-badge">
               <Layers :size="13" />
               <span>{{ sub.nodeCount || 0 }} 节点</span>
@@ -153,6 +156,9 @@
                   <span class="table-url-text">{{ sub.url }}</span>
                   <Copy :size="12" class="table-copy-icon" />
                 </div>
+                <div v-if="sub.ip" class="table-sub-ip" :title="'订阅地址IP: ' + sub.ip">
+                  IP: {{ sub.ip }}
+                </div>
               </td>
               <td>
                 <span class="node-count-badge">
@@ -214,14 +220,14 @@
           </div>
 
           <div class="form-group">
-            <label>订阅链接 (URL，支持多行，重复自动跳过)</label>
+            <label>订阅链接 (URL，支持多行，按IP去重自动跳过)</label>
             <textarea
               v-model="form.url"
-              placeholder="https://airport.com/api/v1/client/subscribe?token=xxx&#10;支持每行一条，多条自动批量添加并跳过重复订阅"
+              placeholder="https://airport.com/api/v1/client/subscribe?token=xxx&#10;支持每行一条，多条自动批量添加并按IP跳过重复订阅"
               rows="3"
               required
             ></textarea>
-            <span class="input-hint">支持每行一条订阅链接，重复订阅将自动跳过；支持 Clash / V2Ray / 原生 Base64 等</span>
+            <span class="input-hint">支持每行一条订阅链接，相同IP的订阅将自动跳过；支持 Clash / V2Ray / 原生 Base64 等</span>
           </div>
 
           <div class="checkbox-group">
@@ -310,6 +316,7 @@ import {
   List
 } from 'lucide-vue-next';
 import api from '../api';
+import { copyToClipboard } from '../utils/clipboard';
 
 const emit = defineEmits(['view-nodes', 'data-changed']);
 
@@ -461,13 +468,12 @@ const deleteSub = async (sub) => {
   }
 };
 
-const copyText = (txt) => {
+const copyText = async (txt) => {
   if (!txt) return;
-  navigator.clipboard.writeText(txt).then(() => {
+  const ok = await copyToClipboard(txt);
+  if (ok) {
     alert('订阅链接已成功复制到剪贴板！');
-  }).catch(() => {
-    prompt('请手动复制链接：', txt);
-  });
+  }
 };
 
 const formatRelativeTime = (iso) => {
@@ -632,6 +638,27 @@ onMounted(() => {
   padding: 3px 8px;
   border-radius: 999px;
   white-space: nowrap;
+}
+
+.sub-ip-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.table-sub-ip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 3px;
 }
 
 .sub-url-box {

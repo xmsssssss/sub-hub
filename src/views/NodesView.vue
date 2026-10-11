@@ -208,9 +208,10 @@
                     class="action-btn"
                     title="单独测速 (超时自动重试3次)"
                     @click="testSingleNode(node)"
-                    :disabled="isTesting"
+                    :disabled="testingNodeIds.has(node.id)"
                   >
-                    <Zap :size="14" />
+                    <RefreshCw v-if="testingNodeIds.has(node.id)" :size="14" class="animate-spin text-primary" />
+                    <Zap v-else :size="14" />
                   </button>
                   <button class="action-btn" title="编辑节点" @click="openEditNode(node)">
                     <Edit3 :size="14" />
@@ -342,6 +343,7 @@ const nodes = ref([]);
 const subs = ref([]);
 const loading = ref(false);
 const selectedIds = ref([]);
+const testingNodeIds = ref(new Set());
 
 const currentPage = ref(1);
 const pageSize = ref(30);
@@ -374,6 +376,7 @@ const fetchNodes = async () => {
   loading.value = true;
   try {
     nodes.value = await api.get('/nodes');
+    testingNodeIds.value.clear();
   } catch (e) {
   } finally {
     loading.value = false;
@@ -451,6 +454,7 @@ const startSpeedTest = () => {
 };
 
 const testSingleNode = (node) => {
+  testingNodeIds.value.add(node.id);
   emit('start-test', [node.id]);
 };
 

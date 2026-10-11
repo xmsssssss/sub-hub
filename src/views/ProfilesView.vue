@@ -54,9 +54,10 @@
             </div>
             <div class="link-action-row">
               <span class="link-url">{{ getFullSubUrl(prof.token, 'clash') }}</span>
-              <button class="btn btn-secondary btn-sm" @click="copyLink(getFullSubUrl(prof.token, 'clash'))">
-                <Copy :size="13" />
-                <span>复制链接</span>
+              <button class="btn btn-secondary btn-sm" @click="copyLink(getFullSubUrl(prof.token, 'clash'), 'clash_' + prof.id)">
+                <Check v-if="copiedKey === 'clash_' + prof.id" :size="13" class="text-success" />
+                <Copy v-else :size="13" />
+                <span>{{ copiedKey === 'clash_' + prof.id ? '已复制！' : '复制链接' }}</span>
               </button>
             </div>
           </div>
@@ -69,9 +70,10 @@
             </div>
             <div class="link-action-row">
               <span class="link-url">{{ getFullSubUrl(prof.token, 'base64') }}</span>
-              <button class="btn btn-secondary btn-sm" @click="copyLink(getFullSubUrl(prof.token, 'base64'))">
-                <Copy :size="13" />
-                <span>复制链接</span>
+              <button class="btn btn-secondary btn-sm" @click="copyLink(getFullSubUrl(prof.token, 'base64'), 'base64_' + prof.id)">
+                <Check v-if="copiedKey === 'base64_' + prof.id" :size="13" class="text-success" />
+                <Copy v-else :size="13" />
+                <span>{{ copiedKey === 'base64_' + prof.id ? '已复制！' : '复制链接' }}</span>
               </button>
             </div>
           </div>
@@ -191,7 +193,11 @@
           <textarea v-else class="preview-textarea" readonly :value="previewContent"></textarea>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" @click="copyLink(previewContent)">复制全部文本</button>
+          <button class="btn btn-secondary" @click="copyLink(previewContent, 'preview')">
+            <Check v-if="copiedKey === 'preview'" :size="14" class="text-success" />
+            <Copy v-else :size="14" />
+            <span>{{ copiedKey === 'preview' ? '已复制全部！' : '复制全部文本' }}</span>
+          </button>
           <button class="btn btn-primary" @click="showPreview = false">关闭</button>
         </div>
       </div>
@@ -208,6 +214,7 @@ import {
   Zap,
   Filter,
   Copy,
+  Check,
   Eye,
   Edit3,
   Trash2,
@@ -215,12 +222,14 @@ import {
 } from 'lucide-vue-next';
 import api from '../api';
 import axios from 'axios';
+import { copyToClipboard } from '../utils/clipboard';
 
 const profiles = ref([]);
 const subs = ref([]);
 const showModal = ref(false);
 const isEditing = ref(false);
 const editingId = ref(null);
+const copiedKey = ref('');
 
 const form = reactive({
   name: '',
@@ -255,10 +264,13 @@ const getFullSubUrl = (token, format = 'clash') => {
   return `${origin}/sub/${token}?format=${format}`;
 };
 
-const copyLink = (txt) => {
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(txt);
-    alert('已成功复制链接到剪贴板！可以直接粘贴到 Clash / 代理客户端使用。');
+const copyLink = async (txt, key = '') => {
+  const ok = await copyToClipboard(txt);
+  if (ok && key) {
+    copiedKey.value = key;
+    setTimeout(() => {
+      if (copiedKey.value === key) copiedKey.value = '';
+    }, 2000);
   }
 };
 

@@ -1,5 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
+const dns = require('dns').promises;
 const bcrypt = require('bcryptjs');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -53,6 +55,7 @@ const DEFAULT_DB = {
 class Database {
   constructor() {
     this.data = this.load();
+    this.ensureSubscriptionIps();
   }
 
   load() {
@@ -154,13 +157,22 @@ class Database {
         this.data.settings = { ...this.data.settings, ...configData.settings };
       }
     } else {
-      // 合并导入 (默认)：去重合并订阅、节点和聚合配置
+      // 合并导入 (默认)：去重合并订阅、节点和聚合配置（优先按订阅IP去重）
       if (Array.isArray(configData.subscriptions)) {
+        const existingIps = new Set(
+          this.data.subscriptions
+            .map(s => (s.ip || this.extractHostFromUrl(s.url) || '').trim().toLowerCase())
+            .filter(Boolean)
+        );
         const existingUrls = new Set(this.data.subscriptions.map(s => (s.url || '').trim().toLowerCase()));
         configData.subscriptions.forEach(sub => {
+          const subIp = (sub.ip || this.extractHostFromUrl(sub.url) || '').trim().toLowerCase();
           const u = (sub.url || '').trim().toLowerCase();
-          if (!existingUrls.has(u)) {
-            existingUrls.add(u);
+          const isDup = (subIp && existingIps.has(subIp)) || existingUrls.has(u);
+          if (!isDup) {
+            if (subIp) existingIps.add(subIp);
+            if (u) existingUrls.add(u);
+            if (!sub.ip && subIp) sub.ip = subIp;
             this.data.subscriptions.push(sub);
           }
         });
@@ -216,6 +228,80 @@ class Database {
   }
 
   // --- Subscriptions ---
+  extractHostFromUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return '';
+    let str = rawUrl.trim();
+    if (!/^https?:\/\//i.test(str)) {
+      str = 'http://' + str;
+    }
+    try {
+      const u = new URL(str);
+      let host = u.hostname;
+      if (host.startsWith('[') && host.endsWith(']')) {
+        host = host.slice(1, -1);
+      }
+      return host;
+    } catch (e) {
+      const m = rawUrl.match(/(?:https?:\/\/)?\[?([a-zA-Z0-9.\-_:]+)\]?(?::\d+)?/);
+      if (m && m[1]) {
+        return m[1].split(':')[0];
+      }
+      return '';
+    }
+  }
+
+  async resolveSubscriptionIp(rawUrl) {
+    const host = this.extractHostFromUrl(rawUrl);
+    if (!host) return '';
+    if (net.isIP(host)) {
+      return host;
+    }
+    try {
+      const lookupPromise = dns.lookup(host);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('DNS lookup timeout')), 2500)
+      );
+      const res = await Promise.race([lookupPromise, timeoutPromise]);
+      if (res && res.address) {
+        return res.address;
+      }
+    } catch (err) {
+      // Fallback to host if resolution fails
+      return host;
+    }
+    return host;
+  }
+
+  ensureSubscriptionIps() {
+    if (Array.isArray(this.data.subscriptions)) {
+      let syncChanged = false;
+      this.data.subscriptions.forEach(s => {
+        if (!s.ip && s.url) {
+          s.ip = this.extractHostFromUrl(s.url);
+          syncChanged = true;
+        }
+      });
+      if (syncChanged) this.save();
+    }
+
+    // Background asynchronous DNS resolution for domains without IP
+    setTimeout(async () => {
+      let changed = false;
+      for (const s of (this.data.subscriptions || [])) {
+        if (s.url && (!s.ip || !net.isIP(s.ip))) {
+          try {
+            const resolved = await this.resolveSubscriptionIp(s.url);
+            if (resolved && resolved !== s.ip) {
+              s.ip = resolved;
+              changed = true;
+            }
+          } catch (e) {}
+        }
+      }
+      if (changed) this.save();
+    }, 1500);
+  }
+
   getSubscriptions() {
     return this.data.subscriptions;
   }
@@ -228,6 +314,15 @@ class Database {
     if (!rawUrl || typeof rawUrl !== 'string') return null;
     const cleanUrl = rawUrl.trim().toLowerCase();
     return this.data.subscriptions.find(s => s.url && s.url.trim().toLowerCase() === cleanUrl);
+  }
+
+  findSubscriptionByIp(targetIp) {
+    if (!targetIp || typeof targetIp !== 'string') return null;
+    const cleanIp = targetIp.trim().toLowerCase();
+    return this.data.subscriptions.find(s => {
+      const sIp = (s.ip || this.extractHostFromUrl(s.url) || '').trim().toLowerCase();
+      return sIp === cleanIp;
+    });
   }
 
   getNextSubName() {
@@ -251,10 +346,12 @@ class Database {
   addSubscription(sub) {
     const id = sub.id || 'sub_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
     const finalName = (sub.name && sub.name.trim()) ? sub.name.trim() : this.getNextSubName();
+    const targetIp = sub.ip || this.extractHostFromUrl(sub.url) || '';
     const newSub = {
       id,
       name: finalName,
       url: (sub.url || '').trim(),
+      ip: targetIp,
       enabled: sub.enabled !== false,
       autoRefresh: sub.autoRefresh !== false,
       intervalHours: sub.intervalHours || 6,
