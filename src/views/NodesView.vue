@@ -119,7 +119,7 @@
         <table class="nodes-table">
           <thead>
             <tr>
-              <th width="40">
+              <th width="36">
                 <input
                   type="checkbox"
                   :checked="isAllSelected"
@@ -127,12 +127,12 @@
                 />
               </th>
               <th>节点名称</th>
-              <th width="100">协议类型</th>
-              <th>服务器地址 : 端口</th>
-              <th width="110">网络 / 伪装</th>
-              <th width="130">整合订阅状态</th>
-              <th width="120">延迟 (Latency)</th>
-              <th width="100">操作</th>
+              <th width="85">协议</th>
+              <th width="190">服务器 : 端口</th>
+              <th width="95">网络 / 伪装</th>
+              <th width="115">整合订阅</th>
+              <th width="110">延迟</th>
+              <th width="90" class="th-actions">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -165,8 +165,10 @@
               </td>
 
               <td class="node-server-cell">
-                <span class="server-host">{{ node.server }}</span>
-                <span class="server-port">:{{ node.port }}</span>
+                <div class="server-host-wrap" :title="node.server + ':' + node.port">
+                  <span class="server-host">{{ node.server }}</span>
+                  <span class="server-port">:{{ node.port }}</span>
+                </div>
               </td>
 
               <td class="node-net-cell">
@@ -545,13 +547,48 @@ const submitEditNode = async () => {
   }
 };
 
+const updateNodeInPlace = (nodeResult) => {
+  if (!nodeResult || !nodeResult.id) return;
+  const target = nodes.value.find(n => n.id === nodeResult.id);
+  if (target) {
+    if (typeof nodeResult.delay === 'number') target.delay = nodeResult.delay;
+    if (nodeResult.status) target.status = nodeResult.status;
+    if (nodeResult.inCombinedSub !== undefined) target.inCombinedSub = Boolean(nodeResult.inCombinedSub);
+    if (nodeResult.lastTestTime) target.lastTestTime = nodeResult.lastTestTime;
+  }
+  testingNodeIds.value.delete(nodeResult.id);
+};
+
+const updateNodesInPlace = (resultsList) => {
+  if (!Array.isArray(resultsList) || resultsList.length === 0) return;
+  const map = new Map(resultsList.map(r => [r.id, r]));
+  for (let i = 0; i < nodes.value.length; i++) {
+    const node = nodes.value[i];
+    const res = map.get(node.id);
+    if (res) {
+      if (typeof res.delay === 'number') node.delay = res.delay;
+      if (res.status) node.status = res.status;
+      if (res.inCombinedSub !== undefined) node.inCombinedSub = Boolean(res.inCombinedSub);
+      if (res.lastTestTime) node.lastTestTime = res.lastTestTime;
+      testingNodeIds.value.delete(node.id);
+    }
+  }
+};
+
+const clearTestingStates = () => {
+  testingNodeIds.value.clear();
+};
+
 onMounted(() => {
   fetchSubs();
   fetchNodes();
 });
 
 defineExpose({
-  fetchNodes
+  fetchNodes,
+  updateNodeInPlace,
+  updateNodesInPlace,
+  clearTestingStates
 });
 </script>
 
@@ -639,7 +676,7 @@ defineExpose({
 
 .nodes-table th {
   background: var(--bg-table-header);
-  padding: 12px 16px;
+  padding: 10px 12px;
   color: var(--text-muted);
   font-weight: 600;
   border-bottom: 1px solid var(--border-color);
@@ -647,7 +684,7 @@ defineExpose({
 }
 
 .nodes-table td {
-  padding: 12px 16px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border-subtle);
   vertical-align: middle;
 }
@@ -664,7 +701,7 @@ defineExpose({
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-width: 320px;
+  max-width: 200px;
 }
 
 .node-name {
@@ -681,12 +718,24 @@ defineExpose({
 }
 
 .node-server-cell {
+  max-width: 190px;
+  width: 190px;
+}
+
+.server-host-wrap {
+  display: flex;
+  align-items: center;
+  max-width: 190px;
   font-family: var(--font-mono);
-  font-size: 12px;
-  white-space: nowrap;
+  font-size: 11.5px;
+  line-height: 1.3;
 }
 
 .server-host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
   color: #2563eb;
 }
 [data-theme="dark"] .server-host {
@@ -694,7 +743,9 @@ defineExpose({
 }
 
 .server-port {
+  flex-shrink: 0;
   color: var(--text-muted);
+  font-size: 11px;
 }
 [data-theme="dark"] .server-port {
   color: #cbd5e1;
@@ -763,10 +814,17 @@ defineExpose({
   font-size: 12px;
 }
 
+.th-actions {
+  text-align: right;
+}
+
 .table-actions {
   display: flex;
   align-items: center;
   gap: 4px;
+  justify-content: flex-end;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .action-btn {

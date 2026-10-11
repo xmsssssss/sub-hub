@@ -147,7 +147,7 @@
             :isTesting="isTesting"
             :testProgress="latestTestProgress"
             @start-test="handleStartSpeedTest"
-            @data-changed="refreshAllData"
+            @data-changed="fetchStats"
           />
 
           <ProfilesView
@@ -518,6 +518,10 @@ const setupWebSocket = () => {
           task.retrying = data.payload.retrying;
           task.percentage = task.total ? Math.min(100, Math.round((task.current / task.total) * 100)) : 0;
         }
+        // 即时局部更新对应完成测速的单个节点（不刷新整个页面）
+        if (data.payload.latest && nodesViewRef.value?.updateNodeInPlace) {
+          nodesViewRef.value.updateNodeInPlace(data.payload.latest);
+        }
       } else if (data.type === 'test_completed') {
         const taskId = data.payload.taskId;
         let task = taskId ? testTasks.value.find(t => t.id === taskId) : testTasks.value.find(t => t.status === 'testing');
@@ -528,7 +532,12 @@ const setupWebSocket = () => {
           task.title = task.total === 1 ? '节点测速完成' : '并发测速完成';
           startTaskAutoClose(task);
         }
-        refreshAllData();
+        // 局部更新对应节点数据（不刷新整个页面、不重置分页和滚动条）
+        if (data.payload.results && nodesViewRef.value?.updateNodesInPlace) {
+          nodesViewRef.value.updateNodesInPlace(data.payload.results);
+        }
+        // 静默更新后台统计（不触发全量重载）
+        fetchStats();
       } else if (data.type === 'test_error') {
         const taskId = data.payload.taskId;
         let task = taskId ? testTasks.value.find(t => t.id === taskId) : testTasks.value.find(t => t.status === 'testing');
@@ -539,7 +548,10 @@ const setupWebSocket = () => {
         } else {
           alert('测速失败: ' + (data.payload?.error || 'Mihomo 内核启动或执行异常'));
         }
-        refreshAllData();
+        if (nodesViewRef.value?.clearTestingStates) {
+          nodesViewRef.value.clearTestingStates();
+        }
+        fetchStats();
       } else if (data.type === 'subscription_updated' || data.type === 'nodes_cleaned') {
         refreshAllData();
       }
