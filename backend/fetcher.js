@@ -40,6 +40,88 @@ function buildRequestConfig(sub) {
   return config;
 }
 
+/**
+ * 对某个订阅下的节点执行测速，并广播实时进度
+ */
+async function testSubscriptionNodes(sub, nodes, { taskIdPrefix = 'autotest', title } = {}) {
+  const settings = db.getSettings();
+  const taskId = `${taskIdPrefix}_${sub.id}_${Date.now().toString(36)}`;
+
+  broadcast('test_started', {
+    taskId,
+    subId: sub.id,
+    title: title || `自动测速: ${sub.name}`,
+    total: nodes.length,
+    nodeNames: nodes.map(n => n.name)
+  });
+
+  const testResults = await tester.testNodes(nodes, {
+    taskId,
+    testUrl: settings.testUrl,
+    timeout: settings.testTimeout,
+    concurrency: settings.testConcurrency,
+    maxRetries: 2, // 自动测速支持重试 2 次，避免节点初始握手抖动导致误判超时
+    onProgress: (progress) => {
+      broadcast('test_progress', { taskId, subId: sub.id, ...progress });
+    }
+  });
+
+  if (testResults.length < nodes.length) {
+    db.addLog('warn', `订阅 [${sub.name}] 有 ${nodes.length - testResults.length} 个节点因当前内核不支持其协议已跳过测速`, { subId: sub.id });
+  }
+
+  db.updateNodesBatch(testResults);
+  const aliveCount = testResults.filter(r => r.inCombinedSub).length;
+  broadcast('test_completed', { taskId, subId: sub.id, results: testResults, count: testResults.length });
+  return { testResults, aliveCount };
+}
+
+/**
+ * 订阅刷新失败（HTTP 非 200）时，回退为测试上一次已获取的节点
+ */
+function fallbackTestExistingNodes(sub, httpStatus, existingNodes) {
+  const reason = `HTTP ${httpStatus}`;
+  const updatingSub = db.updateSubscription(sub.id, {
+    lastStatus: 'updating',
+    lastMessage: `刷新失败（${reason}），正在测试上次获取的 ${existingNodes.length} 个节点...`
+  });
+  broadcast('subscription_updated', { id: sub.id, sub: updatingSub });
+  db.addLog('warn', `订阅 [${sub.name}] 刷新失败（${reason}），已改为测试上次获取的 ${existingNodes.length} 个节点`, { subId: sub.id });
+
+  setTimeout(async () => {
+    try {
+      const { aliveCount } = await testSubscriptionNodes(sub, existingNodes, {
+        taskIdPrefix: 'fallbacktest',
+        title: `刷新失败回退测速: ${sub.name}`
+      });
+      const finalSub = db.updateSubscription(sub.id, {
+        nodeCount: existingNodes.length,
+        aliveCount,
+        lastUpdate: new Date().toISOString(),
+        lastStatus: 'warning',
+        lastMessage: `刷新失败（${reason}），已使用上次节点完成测速：${aliveCount}/${existingNodes.length} 可用`
+      });
+      broadcast('subscription_updated', { id: sub.id, sub: finalSub });
+      db.addLog('info', `订阅 [${sub.name}] 回退测速完成：${aliveCount}/${existingNodes.length} 个节点可用`, { subId: sub.id, aliveCount });
+    } catch (e) {
+      console.error('[Fetcher] Fallback test error:', e.message);
+      const failedSub = db.updateSubscription(sub.id, {
+        lastStatus: 'warning',
+        lastMessage: `刷新失败（${reason}），上次节点测速异常：${e.message}`
+      });
+      broadcast('subscription_updated', { id: sub.id, sub: failedSub });
+      db.addLog('warn', `订阅 [${sub.name}] 刷新失败（${reason}），回退测速异常：${e.message}`, { subId: sub.id });
+    }
+  }, 300);
+
+  return {
+    success: true,
+    fallback: true,
+    count: existingNodes.length,
+    message: `订阅服务器返回 ${reason}，已改为在后台测试上次获取的 ${existingNodes.length} 个节点`
+  };
+}
+
 async function fetchSubscription(subId) {
   const sub = db.getSubscription(subId);
   if (!sub) {
@@ -61,7 +143,19 @@ async function fetchSubscription(subId) {
       } catch (e) {}
     }
 
-    const response = await axios.get(sub.url, buildRequestConfig(sub));
+    let response;
+    try {
+      response = await axios.get(sub.url, buildRequestConfig(sub));
+    } catch (err) {
+      const httpStatus = err.response && err.response.status;
+      if (httpStatus && httpStatus !== 200) {
+        const previousNodes = db.getNodes({ subId });
+        if (previousNodes.length > 0) {
+          return fallbackTestExistingNodes(sub, httpStatus, previousNodes);
+        }
+      }
+      throw err;
+    }
 
     const rawData = response.data;
     if (!rawData || typeof rawData !== 'string') {
@@ -113,34 +207,7 @@ async function fetchSubscription(subId) {
       try {
         const freshNodes = db.getNodes({ subId });
         if (!freshNodes || freshNodes.length === 0) return;
-        const settings = db.getSettings();
-        const taskId = 'autotest_' + subId + '_' + Date.now().toString(36);
-
-        broadcast('test_started', {
-          taskId,
-          subId,
-          title: `自动测速: ${sub.name}`,
-          total: freshNodes.length,
-          nodeNames: freshNodes.map(n => n.name)
-        });
-
-        const testResults = await tester.testNodes(freshNodes, {
-          taskId,
-          testUrl: settings.testUrl,
-          timeout: settings.testTimeout,
-          concurrency: settings.testConcurrency,
-          maxRetries: 2, // 自动测速支持重试 2 次，避免节点初始握手抖动导致误判超时
-          onProgress: (progress) => {
-            broadcast('test_progress', { taskId, subId, ...progress });
-          }
-        });
-
-        if (testResults.length < freshNodes.length) {
-          db.addLog('warn', `订阅 [${sub.name}] 有 ${freshNodes.length - testResults.length} 个节点因当前内核不支持其协议已跳过测速`, { subId });
-        }
-
-        db.updateNodesBatch(testResults);
-        const aliveCount = testResults.filter(r => r.inCombinedSub).length;
+        const { aliveCount } = await testSubscriptionNodes(sub, freshNodes);
         const finalSub = db.updateSubscription(subId, {
           nodeCount: freshNodes.length,
           aliveCount,
@@ -149,7 +216,6 @@ async function fetchSubscription(subId) {
           lastMessage: `同步完成：共 ${freshNodes.length} 节点，${aliveCount} 个可用`
         });
         db.addLog('info', `订阅 [${sub.name}] 自动延迟测试完毕：${aliveCount} 个可用节点已自动纳入整合订阅`, { subId, aliveCount });
-        broadcast('test_completed', { taskId, subId, results: testResults, count: testResults.length });
         broadcast('subscription_updated', { id: subId, sub: finalSub });
       } catch (e) {
         console.error('[Fetcher] Auto-test after refresh error:', e.message);

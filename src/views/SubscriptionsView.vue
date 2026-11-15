@@ -887,6 +887,13 @@ defineExpose({
 .dot-success { background: #10b981; box-shadow: 0 0 6px rgba(16, 185, 129, 0.5); }
 .dot-failed, .dot-error { background: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.5); }
 .dot-pending { background: #f59e0b; }
+.dot-warning { background: #f59e0b; box-shadow: 0 0 6px rgba(245, 158, 11, 0.5); }
+.dot-updating { background: #3b82f6; box-shadow: 0 0 6px rgba(59, 130, 246, 0.5); animation: dot-pulse 1.4s ease-in-out infinite; }
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
 
 .status-text {
   color: var(--text-muted);
