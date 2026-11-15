@@ -335,7 +335,8 @@ class Database {
     const existingNames = new Set(this.data.subscriptions.map(s => (s.name || '').trim().toLowerCase()));
     let maxNum = 0;
     this.data.subscriptions.forEach(s => {
-      const match = (s.name || '').trim().match(/^sub-(\d+)$/i);
+      // 兼容 "sub-3" 以及 "sub-3 FOFA 1.2.3.4:8080" 这类带前缀的命名
+      const match = (s.name || '').trim().match(/^sub-(\d+)(?:\s|$)/i);
       if (match) {
         const num = parseInt(match[1], 10);
         if (num > maxNum) maxNum = num;

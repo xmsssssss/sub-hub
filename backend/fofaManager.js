@@ -450,7 +450,9 @@ function createFofaApiError(message) {
 }
 
 function makeSubscriptionName(ip, port) {
-  const base = `FOFA ${ip}${port ? `:${port}` : ''}`;
+  // 统一带上 sub-序号 前缀，便于与手动添加的订阅保持一致的编号体系
+  const prefix = db.getNextSubName();
+  const base = `${prefix} FOFA ${ip}${port ? `:${port}` : ''}`;
   const names = new Set(db.getSubscriptions().map(sub => String(sub.name || '').toLowerCase()));
   let name = base;
   let index = 2;
