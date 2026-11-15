@@ -80,6 +80,7 @@
           <option value="hysteria2">Hysteria 2</option>
           <option value="hysteria">Hysteria 1</option>
           <option value="tuic">TUIC</option>
+          <option value="anytls">AnyTLS</option>
           <option value="socks5">SOCKS5 / HTTP</option>
         </select>
 

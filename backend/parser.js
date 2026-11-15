@@ -8,6 +8,7 @@
  * - Trojan (trojan://)
  * - Hysteria 1/2 (hysteria://, hy2://)
  * - TUIC (tuic://)
+ * - AnyTLS (anytls://)
  * - WireGuard (wireguard://)
  * - SOCKS5 / HTTP (socks5://, http://)
  * - Clash Proxies YAML / Base64 Raw lists
@@ -295,6 +296,39 @@ function parseTuic(uri) {
   }
 }
 
+// 6.5 AnyTLS
+function parseAnyTLS(uri) {
+  try {
+    const u = new URL(uri);
+    const params = new URLSearchParams(u.search);
+    const password = decodeURIComponent(u.username || params.get('password') || '');
+    const insecure = ['1', 'true'].includes(String(params.get('insecure') || params.get('allowInsecure') || '').toLowerCase());
+
+    const node = {
+      type: 'anytls',
+      name: decodeURIComponent(u.hash ? u.hash.slice(1) : 'AnyTLS-' + u.hostname),
+      server: u.hostname,
+      port: parseInt(u.port || 443, 10),
+      password: password,
+      udp: true,
+      'client-fingerprint': params.get('fp') || 'chrome',
+      'skip-cert-verify': insecure
+    };
+
+    const sni = params.get('sni') || params.get('peer');
+    if (sni) node.sni = sni;
+    if (params.get('alpn')) node.alpn = params.get('alpn').split(',');
+    if (params.get('idle-session-check-interval')) node['idle-session-check-interval'] = parseInt(params.get('idle-session-check-interval'), 10);
+    if (params.get('idle-session-timeout')) node['idle-session-timeout'] = parseInt(params.get('idle-session-timeout'), 10);
+    if (params.get('min-idle-session')) node['min-idle-session'] = parseInt(params.get('min-idle-session'), 10);
+
+    if (!node.server || !node.port || !node.password) return null;
+    return node;
+  } catch (e) {
+    return null;
+  }
+}
+
 // 7. SOCKS5 / HTTP
 function parseSocksHttp(uri) {
   try {
@@ -364,6 +398,7 @@ function parseUri(line) {
   if (line.startsWith('trojan://')) return parseTrojan(line);
   if (line.startsWith('hy2://') || line.startsWith('hysteria2://') || line.startsWith('hysteria://')) return parseHysteria(line);
   if (line.startsWith('tuic://')) return parseTuic(line);
+  if (line.startsWith('anytls://')) return parseAnyTLS(line);
   if (line.startsWith('socks5://') || line.startsWith('socks://') || line.startsWith('http://') || line.startsWith('https://')) return parseSocksHttp(line);
   return null;
 }

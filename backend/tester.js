@@ -170,10 +170,27 @@ class MihomoTester {
 
     return new Promise((resolve) => {
       let started = false;
-      let lastError = '';
-      const timeout = setTimeout(() => {
+      let settled = false;
+      let outputBuf = '';
+      let timeout = null;
+      let healthInterval = null;
+
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        if (healthInterval) clearInterval(healthInterval);
+        resolve(result);
+      };
+
+      const getErrorText = () => outputBuf.trim();
+
+      timeout = setTimeout(() => {
         if (!started) {
-          resolve({ ok: false, error: lastError || '启动超时 (7s 内未收到 Mihomo RESTful API 监听就绪信号)' });
+          finish({
+            ok: false,
+            error: getErrorText() || '启动超时 (7s 内未收到 Mihomo RESTful API 监听就绪信号)'
+          });
         }
       }, 7000);
 
@@ -181,70 +198,112 @@ class MihomoTester {
         const proc = spawn(this.mihomoBinary, ['-d', this.configDir, '-f', configFile]);
         this.activeTasks.set(taskId, { proc, configFile, apiPort, secret });
 
+        const handleOutput = (str) => {
+          outputBuf += str;
+          if (str.includes('RESTful API listening at') || str.includes('Initial configuration complete')) {
+            if (!started) {
+              started = true;
+              finish({ ok: true });
+            }
+          }
+        };
+
         proc.stdout.on('data', d => {
           const str = d.toString();
           if (str.includes('RESTful API listening at') || str.includes('Initial configuration complete')) {
             if (!started) {
               started = true;
-              clearTimeout(timeout);
-              resolve({ ok: true });
+              finish({ ok: true });
             }
+          } else {
+            outputBuf += str;
           }
         });
 
         proc.stderr.on('data', d => {
           const str = d.toString();
           console.error('[Mihomo stderr]:', str);
-          lastError = str.trim();
-          if (str.includes('RESTful API listening at') || str.includes('Initial configuration complete')) {
-            if (!started) {
-              started = true;
-              clearTimeout(timeout);
-              resolve({ ok: true });
-            }
-          }
+          handleOutput(str);
         });
 
         proc.on('error', err => {
           console.error('[Mihomo] Process spawn error:', err.message);
-          lastError = err.message;
-          if (!started) {
-            started = true;
-            clearTimeout(timeout);
-            resolve({ ok: false, error: err.message });
-          }
+          outputBuf += err.message;
+          if (!started) finish({ ok: false, error: err.message });
         });
 
         proc.on('exit', (code, signal) => {
           console.warn(`[Mihomo] Task ${taskId} exited with code ${code}, signal ${signal}`);
           if (!started) {
-            started = true;
-            clearTimeout(timeout);
-            resolve({ ok: false, error: lastError || `进程启动后异常退出 (退出码: ${code}, 信号: ${signal})` });
+            // 等待输出流冲刷完毕后再返回，确保能拿到内核给出的具体错误原因
+            setTimeout(() => {
+              finish({
+                ok: false,
+                error: getErrorText() || `进程启动后异常退出 (退出码: ${code}, 信号: ${signal})`
+              });
+            }, 150);
           }
           this.activeTasks.delete(taskId);
         });
 
         // Also polling health check
-        const interval = setInterval(async () => {
-          if (started) {
-            clearInterval(interval);
+        healthInterval = setInterval(async () => {
+          if (started || settled) {
+            clearInterval(healthInterval);
             return;
           }
           const ok = await this.pingApi(apiPort, secret);
           if (ok) {
             started = true;
-            clearInterval(interval);
-            clearTimeout(timeout);
-            resolve({ ok: true });
+            finish({ ok: true });
           }
         }, 200);
 
       } catch (err) {
-        clearTimeout(timeout);
-        resolve({ ok: false, error: err.message });
+        finish({ ok: false, error: err.message });
       }
     });
+  }
+
+  /**
+   * 从内核启动错误中识别当前内核不支持的节点，并返回剔除后的列表
+   */
+  filterUnsupportedProxies(nodes, errorText) {
+    const text = String(errorText || '');
+    const badTypes = new Set();
+    const badIndexes = new Set();
+    let m;
+
+    const typePatterns = [
+      /unsupported\s+(?:proxy\s+)?type[:\s]+["']?([a-zA-Z0-9_-]+)/gi,
+      /unknown\s+proxy\s+type[:\s]+["']?([a-zA-Z0-9_-]+)/gi,
+      /proxy\s+type\s+["']?([a-zA-Z0-9_-]+)["']?\s+(?:is\s+)?not\s+(?:supported|found)/gi
+    ];
+    typePatterns.forEach(pattern => {
+      while ((m = pattern.exec(text)) !== null) {
+        badTypes.add(m[1].toLowerCase());
+      }
+    });
+
+    if (badTypes.size === 0) {
+      const indexPattern = /prox(?:y|ies)\s*[\[\(#:]?\s*(\d+)/gi;
+      while ((m = indexPattern.exec(text)) !== null) {
+        badIndexes.add(parseInt(m[1], 10));
+      }
+    }
+
+    const remaining = [];
+    const removed = [];
+    nodes.forEach((node, idx) => {
+      const t = (node.type || '').toLowerCase();
+      if (badTypes.has(t) || (badTypes.size === 0 && badIndexes.has(idx))) {
+        removed.push(node);
+      } else {
+        remaining.push(node);
+      }
+    });
+
+    return { remaining, removed };
   }
 
   pingApi(apiPort, secret) {
@@ -346,29 +405,59 @@ class MihomoTester {
       const uniqueNamedNodes = this.ensureUniqueNodeNames(nodes);
 
       // 1. Start mihomo instance loaded with these nodes
-      const startRes = await this.startMihomoWithNodes(uniqueNamedNodes, {
-        taskId: currentTaskId,
-        apiPort,
-        secret,
-        configFile
-      });
+      //    若订阅中含有当前内核不支持的协议（如旧内核不支持 anytls），自动剔除该部分节点后重试，
+      //    避免单个不兼容节点导致整个测速任务直接失败。
+      let workingNodes = uniqueNamedNodes;
+      const unsupportedNodes = [];
+      let startRes = null;
 
-      if (!startRes || !startRes.ok) {
-        throw new Error(`无法启动 Mihomo 内核程序 (${this.mihomoBinary})，原因: ${startRes?.error || '未知错误'}`);
+      for (let attempt = 0; attempt < 5; attempt++) {
+        startRes = await this.startMihomoWithNodes(workingNodes, {
+          taskId: currentTaskId,
+          apiPort,
+          secret,
+          configFile
+        });
+        if (startRes && startRes.ok) break;
+
+        const { remaining, removed } = this.filterUnsupportedProxies(workingNodes, startRes?.error);
+        if (removed.length === 0) break;
+
+        // 清理上一次启动失败的进程，避免残留
+        await this.stopMihomoTask(currentTaskId);
+
+        console.warn('[Mihomo] 当前内核不支持的节点已跳过:', removed.map(n => `${n.name}(${n.type})`).join(', '));
+        unsupportedNodes.push(...removed);
+        workingNodes = remaining;
+        if (workingNodes.length === 0) break;
       }
 
-      // 给 Mihomo 预热 500ms，确保内部出站代理通道与 DNS 解析就绪
-      await new Promise(r => setTimeout(r, 500));
+      const allUnsupported = workingNodes.length === 0 && unsupportedNodes.length > 0;
 
-      // 2. Queue for testing
+      if (!allUnsupported && (!startRes || !startRes.ok)) {
+        const reason = startRes?.error || '未知错误';
+        const hint = /unsupported\s+proxy/i.test(reason)
+          ? '（当前 Mihomo 内核版本不支持订阅中的部分协议，可在「系统配置 → Mihomo 内核」中升级内核后重试）'
+          : '';
+        throw new Error(`无法启动 Mihomo 内核程序 (${this.mihomoBinary})，原因: ${reason}${hint}`);
+      }
+
       const results = [];
-      let index = 0;
       const total = uniqueNamedNodes.length;
 
+      if (!allUnsupported) {
+        // 给 Mihomo 预热 500ms，确保内部出站代理通道与 DNS 解析就绪
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      // 2. Queue for testing
+      let index = 0;
+      const testableCount = workingNodes.length;
+
       const worker = async () => {
-        while (index < total) {
+        while (index < testableCount) {
           const currentIndex = index++;
-          const node = uniqueNamedNodes[currentIndex];
+          const node = workingNodes[currentIndex];
           const testRes = await this.testSingleProxyWithRetry(
             node.name,
             testUrl,
@@ -411,12 +500,23 @@ class MihomoTester {
       };
 
       const workers = [];
-      const workerCount = Math.min(concurrency, total);
+      const workerCount = Math.min(concurrency, workingNodes.length);
       for (let i = 0; i < workerCount; i++) {
         workers.push(worker());
       }
 
       await Promise.all(workers);
+
+      // 因当前内核不支持而跳过的节点：保留其原有状态不做修改，仅推进进度，避免误判为失效节点
+      for (let i = 0; i < unsupportedNodes.length; i++) {
+        if (onProgress) {
+          onProgress({
+            current: results.length + i + 1,
+            total
+          });
+        }
+      }
+
       return results;
 
     } finally {

@@ -135,6 +135,10 @@ async function fetchSubscription(subId) {
           }
         });
 
+        if (testResults.length < freshNodes.length) {
+          db.addLog('warn', `订阅 [${sub.name}] 有 ${freshNodes.length - testResults.length} 个节点因当前内核不支持其协议已跳过测速`, { subId });
+        }
+
         db.updateNodesBatch(testResults);
         const aliveCount = testResults.filter(r => r.inCombinedSub).length;
         const finalSub = db.updateSubscription(subId, {

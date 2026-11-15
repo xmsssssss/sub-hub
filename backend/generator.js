@@ -340,6 +340,13 @@ function generateBase64Subscription(nodes) {
         if (node.obfs) params.set('obfs', node.obfs);
         if (node['obfs-password']) params.set('obfs-password', node['obfs-password']);
         lines.push(`hy2://${encodeURIComponent(node.password || node.auth)}@${node.server}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
+      } else if (node.type === 'anytls') {
+        const params = new URLSearchParams();
+        if (node.sni) params.set('sni', node.sni);
+        if (node['skip-cert-verify']) params.set('insecure', '1');
+        if (node['client-fingerprint']) params.set('fp', node['client-fingerprint']);
+        if (node.alpn) params.set('alpn', Array.isArray(node.alpn) ? node.alpn.join(',') : node.alpn);
+        lines.push(`anytls://${encodeURIComponent(node.password)}@${node.server}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
       }
     } catch (e) {}
   }

@@ -7,7 +7,7 @@
 ## 🌟 核心特性
 
 1. **全协议节点识别与解析**
-   - 支持主流全部协议：`VMess`、`VLESS`（包含 Reality 与 Vision flow）、`Shadowsocks (SS)`、`ShadowsocksR (SSR)`、`Trojan`、`Hysteria 1/2 (hy2)`、`TUIC`、`SOCKS5`、`HTTP`。
+   - 支持主流全部协议：`VMess`、`VLESS`（包含 Reality 与 Vision flow）、`Shadowsocks (SS)`、`ShadowsocksR (SSR)`、`Trojan`、`Hysteria 1/2 (hy2)`、`TUIC`、`AnyTLS`、`SOCKS5`、`HTTP`。
    - 支持直接解析标准 Base64 订阅文本、Clash / Mihomo YAML 订阅、多行 URI 混合文本。
    - 可以在前端直接粘贴机场链接，或一键导入剪贴板大段原始节点链接。
 

@@ -587,6 +587,10 @@ app.post('/api/nodes/test-speed', authMiddleware, async (req, res) => {
     db.updateNodesBatch(results);
     const aliveCount = results.filter(r => r.inCombinedSub).length;
 
+    if (results.length < targetNodes.length) {
+      db.addLog('warn', `有 ${targetNodes.length - results.length} 个节点因当前内核不支持其协议已跳过测速`);
+    }
+
     if (subId) {
       const finalSub = db.updateSubscription(subId, {
         aliveCount,
