@@ -339,6 +339,38 @@
       </div>
     </div>
 
+    <!-- Refresh Result Modal -->
+    <div v-if="refreshResult.visible" class="modal-backdrop" @click.self="refreshResult.visible = false">
+      <div class="modal-card glass refresh-result-card">
+        <div class="modal-header">
+          <h3>订阅刷新结果</h3>
+          <button class="modal-close" @click="refreshResult.visible = false">×</button>
+        </div>
+
+        <div class="modal-body">
+          <div :class="['refresh-status-box', refreshResult.type]">
+            <AlertCircle :size="22" class="refresh-status-icon" />
+            <div class="refresh-status-content">
+              <div class="refresh-status-title">{{ refreshResult.title }}</div>
+              <div class="refresh-status-message">{{ refreshResult.message }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer refresh-result-footer">
+          <span class="refresh-footer-hint" v-if="refreshResult.fallback">
+            <RefreshCw :size="13" />
+            将会自动测试该订阅已有节点
+          </span>
+          <span class="refresh-footer-hint" v-else>
+            <AlertCircle :size="13" />
+            该订阅暂无历史节点，无法回退测速
+          </span>
+          <button class="btn btn-primary" @click="refreshResult.visible = false">知道了</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Paste Raw Nodes Modal -->
     <div v-if="showRawModal" class="modal-backdrop" @click.self="showRawModal = false">
       <div class="modal-card glass modal-lg">
@@ -410,6 +442,23 @@ const emit = defineEmits(['view-nodes', 'data-changed', 'test-sub']);
 const subs = ref([]);
 const loading = ref(false);
 const refreshingId = ref(null);
+
+// 刷新结果弹窗
+const refreshResult = reactive({
+  visible: false,
+  type: 'warning',
+  title: '',
+  message: '',
+  fallback: false
+});
+
+const showRefreshResultModal = ({ type = 'warning', title, message, fallback = false }) => {
+  refreshResult.type = type;
+  refreshResult.title = title;
+  refreshResult.message = message;
+  refreshResult.fallback = fallback;
+  refreshResult.visible = true;
+};
 
 // 编辑弹窗中的节点与测速状态
 const subNodes = ref([]);
@@ -609,11 +658,24 @@ const toggleEnable = async (sub) => {
 const refreshSub = async (sub) => {
   refreshingId.value = sub.id;
   try {
-    await api.post(`/subscriptions/${sub.id}/refresh`);
+    const res = await api.post(`/subscriptions/${sub.id}/refresh`);
     await fetchSubs();
     emit('data-changed');
+    if (res && res.fallback) {
+      showRefreshResultModal({
+        type: 'warning',
+        title: '订阅刷新失败，已切换回退测速',
+        message: res.message || '订阅服务器请求失败，已改为测试上次获取的节点',
+        fallback: true
+      });
+    }
   } catch (err) {
-    alert('刷新订阅失败: ' + (err.message || '网络连接超时'));
+    showRefreshResultModal({
+      type: 'error',
+      title: '刷新订阅失败',
+      message: err.message || '网络连接超时',
+      fallback: false
+    });
   } finally {
     refreshingId.value = null;
   }
@@ -1161,6 +1223,88 @@ input:checked + .slider:before {
   background: rgba(239, 68, 68, 0.1);
   padding: 10px 14px;
   border-radius: 6px;
+}
+
+/* Refresh Result Modal */
+.refresh-result-card {
+  max-width: 440px;
+}
+
+.refresh-status-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+
+.refresh-status-box.warning {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.28);
+  color: #b45309;
+}
+
+.refresh-status-box.error {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.28);
+  color: #dc2626;
+}
+
+[data-theme="dark"] .refresh-status-box.warning {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fbbf24;
+}
+
+[data-theme="dark"] .refresh-status-box.error {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #f87171;
+}
+
+.refresh-status-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.refresh-status-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.refresh-status-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.refresh-status-message {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.refresh-result-footer {
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.refresh-footer-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  min-width: 0;
+}
+
+.refresh-footer-hint svg {
+  flex-shrink: 0;
+  color: var(--primary);
 }
 
 .loading-state {

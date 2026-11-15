@@ -77,6 +77,33 @@ async function testSubscriptionNodes(sub, nodes, { taskIdPrefix = 'autotest', ti
 }
 
 /**
+ * 将订阅请求异常转换为可读原因
+ */
+function describeRequestError(err) {
+  if (err && err.response && err.response.status) {
+    return `HTTP ${err.response.status}`;
+  }
+  const code = err && err.code;
+  const message = (err && err.message) || '';
+  if (code === 'ECONNABORTED' || code === 'ETIMEDOUT' || /timeout/i.test(message)) {
+    return '请求超时';
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return '域名解析失败';
+  }
+  if (code === 'ECONNREFUSED') {
+    return '连接被拒绝';
+  }
+  if (code === 'ECONNRESET') {
+    return '连接被重置';
+  }
+  if (/certificate|tls|ssl/i.test(message)) {
+    return 'TLS 证书校验失败';
+  }
+  return `请求失败${code ? `（${code}）` : ''}`;
+}
+
+/**
  * 自动刷新后若可用节点为 0，则自动关闭该订阅
  */
 function autoDisableIfNoAliveNodes(sub, aliveCount, reasonText) {
@@ -92,10 +119,9 @@ function autoDisableIfNoAliveNodes(sub, aliveCount, reasonText) {
 }
 
 /**
- * 订阅刷新失败（HTTP 非 200）时，回退为测试上一次已获取的节点
+ * 订阅刷新失败（非 200 / 超时 / 网络异常）时，回退为测试上一次已获取的节点
  */
-function fallbackTestExistingNodes(sub, httpStatus, existingNodes, options = {}) {
-  const reason = `HTTP ${httpStatus}`;
+function fallbackTestExistingNodes(sub, reason, existingNodes, options = {}) {
   const updatingSub = db.updateSubscription(sub.id, {
     lastStatus: 'updating',
     lastMessage: `刷新失败（${reason}），正在测试上次获取的 ${existingNodes.length} 个节点...`
@@ -136,8 +162,9 @@ function fallbackTestExistingNodes(sub, httpStatus, existingNodes, options = {})
   return {
     success: true,
     fallback: true,
+    reason,
     count: existingNodes.length,
-    message: `订阅服务器返回 ${reason}，已改为在后台测试上次获取的 ${existingNodes.length} 个节点`
+    message: `订阅刷新失败（${reason}），已改为在后台测试上次获取的 ${existingNodes.length} 个节点`
   };
 }
 
@@ -166,12 +193,11 @@ async function fetchSubscription(subId, options = {}) {
     try {
       response = await axios.get(sub.url, buildRequestConfig(sub));
     } catch (err) {
-      const httpStatus = err.response && err.response.status;
-      if (httpStatus && httpStatus !== 200) {
-        const previousNodes = db.getNodes({ subId });
-        if (previousNodes.length > 0) {
-          return fallbackTestExistingNodes(sub, httpStatus, previousNodes, options);
-        }
+      // 非 200、请求超时、网络异常等均视为刷新失败；若存在历史节点则回退测速
+      const reason = describeRequestError(err);
+      const previousNodes = db.getNodes({ subId });
+      if (previousNodes.length > 0) {
+        return fallbackTestExistingNodes(sub, reason, previousNodes, options);
       }
       throw err;
     }
@@ -257,7 +283,9 @@ async function fetchSubscription(subId, options = {}) {
     };
 
   } catch (err) {
-    let errorMsg = err.response ? `HTTP ${err.response.status}: ${err.message}` : err.message;
+    let errorMsg = err.response
+      ? `HTTP ${err.response.status}: ${err.message}`
+      : `${describeRequestError(err)}: ${err.message}`;
     if (err.code === 'ERR_TLS_CERT_ALTNAME_INVALID') {
       errorMsg += '。证书域名与订阅地址不匹配；如确认订阅服务器可信，请在系统设置中开启「忽略 TLS 证书校验」后重试。';
     } else if (err.code === 'CERT_HAS_EXPIRED' || /certificate has expired/i.test(err.message || '')) {
