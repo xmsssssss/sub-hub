@@ -77,9 +77,24 @@ async function testSubscriptionNodes(sub, nodes, { taskIdPrefix = 'autotest', ti
 }
 
 /**
+ * 自动刷新后若可用节点为 0，则自动关闭该订阅
+ */
+function autoDisableIfNoAliveNodes(sub, aliveCount, reasonText) {
+  if (aliveCount > 0) return null;
+  const disabledSub = db.updateSubscription(sub.id, {
+    enabled: false,
+    lastStatus: 'failed',
+    lastMessage: `${reasonText}，可用节点为 0，已自动关闭该订阅`
+  });
+  broadcast('subscription_updated', { id: sub.id, sub: disabledSub });
+  db.addLog('warn', `订阅 [${sub.name}] ${reasonText}，可用节点为 0，已自动关闭该订阅`, { subId: sub.id });
+  return disabledSub;
+}
+
+/**
  * 订阅刷新失败（HTTP 非 200）时，回退为测试上一次已获取的节点
  */
-function fallbackTestExistingNodes(sub, httpStatus, existingNodes) {
+function fallbackTestExistingNodes(sub, httpStatus, existingNodes, options = {}) {
   const reason = `HTTP ${httpStatus}`;
   const updatingSub = db.updateSubscription(sub.id, {
     lastStatus: 'updating',
@@ -103,6 +118,10 @@ function fallbackTestExistingNodes(sub, httpStatus, existingNodes) {
       });
       broadcast('subscription_updated', { id: sub.id, sub: finalSub });
       db.addLog('info', `订阅 [${sub.name}] 回退测速完成：${aliveCount}/${existingNodes.length} 个节点可用`, { subId: sub.id, aliveCount });
+
+      if (options.auto) {
+        autoDisableIfNoAliveNodes(sub, aliveCount, `自动刷新失败（${reason}）`);
+      }
     } catch (e) {
       console.error('[Fetcher] Fallback test error:', e.message);
       const failedSub = db.updateSubscription(sub.id, {
@@ -122,7 +141,7 @@ function fallbackTestExistingNodes(sub, httpStatus, existingNodes) {
   };
 }
 
-async function fetchSubscription(subId) {
+async function fetchSubscription(subId, options = {}) {
   const sub = db.getSubscription(subId);
   if (!sub) {
     throw new Error('未找到指定订阅: ' + subId);
@@ -151,7 +170,7 @@ async function fetchSubscription(subId) {
       if (httpStatus && httpStatus !== 200) {
         const previousNodes = db.getNodes({ subId });
         if (previousNodes.length > 0) {
-          return fallbackTestExistingNodes(sub, httpStatus, previousNodes);
+          return fallbackTestExistingNodes(sub, httpStatus, previousNodes, options);
         }
       }
       throw err;
@@ -217,6 +236,10 @@ async function fetchSubscription(subId) {
         });
         db.addLog('info', `订阅 [${sub.name}] 自动延迟测试完毕：${aliveCount} 个可用节点已自动纳入整合订阅`, { subId, aliveCount });
         broadcast('subscription_updated', { id: subId, sub: finalSub });
+
+        if (options.auto) {
+          autoDisableIfNoAliveNodes(sub, aliveCount, '自动刷新后');
+        }
       } catch (e) {
         console.error('[Fetcher] Auto-test after refresh error:', e.message);
         const fallbackSub = db.updateSubscription(subId, {

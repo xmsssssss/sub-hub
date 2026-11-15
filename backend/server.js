@@ -151,8 +151,14 @@ app.post('/api/auth/password', authMiddleware, (req, res) => {
 // Overview Statistics
 app.get('/api/dashboard/stats', authMiddleware, (req, res) => {
   const subs = db.getSubscriptions();
-  const nodes = db.getNodes();
   const profiles = db.getProfiles();
+  const subMap = new Map(subs.map(s => [s.id, s]));
+
+  // 已关闭的订阅不计入整体节点统计（手动导入节点不受影响）
+  const nodes = db.getNodes().filter(n => {
+    const owner = n.subId ? subMap.get(n.subId) : null;
+    return !owner || owner.enabled;
+  });
 
   const totalSubs = subs.length;
   const totalNodes = nodes.length;

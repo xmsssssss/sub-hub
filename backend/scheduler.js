@@ -33,7 +33,7 @@ class Scheduler {
         for (const sub of subs) {
           try {
             console.log(`[Scheduler] Auto-refreshing subscription: ${sub.name}`);
-            await fetchSubscription(sub.id);
+            await fetchSubscription(sub.id, { auto: true });
           } catch (e) {
             console.error(`[Scheduler] Failed to auto-refresh ${sub.name}:`, e.message);
           }

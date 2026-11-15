@@ -360,7 +360,8 @@ const filters = reactive({
   subId: props.initialSubId || '',
   protocol: '',
   status: '',
-  inCombinedSub: ''
+  // 默认仅展示处于整合订阅中的节点
+  inCombinedSub: 'true'
 });
 
 // Edit Node Modal State
