@@ -357,7 +357,7 @@
             <label>节点内容 (支持各类链接、多行文本或 Clash YAML)</label>
             <textarea
               v-model="rawForm.rawText"
-              placeholder="粘贴包含 vmess://, vless://, ss://, trojan://, hy2:// 或 proxies: 节点的文本..."
+              placeholder="粘贴包含 vmess://, vless://, ss://, trojan://, hy2://, tuic://, anytls://, wireguard://, ssh://, snell://, mieru:// 或 proxies: 节点的文本..."
               rows="8"
               required
             ></textarea>

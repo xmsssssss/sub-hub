@@ -7,7 +7,7 @@
 ## 🌟 核心特性
 
 1. **全协议节点识别与解析**
-   - 支持主流全部协议：`VMess`、`VLESS`（包含 Reality 与 Vision flow）、`Shadowsocks (SS)`、`ShadowsocksR (SSR)`、`Trojan`、`Hysteria 1/2 (hy2)`、`TUIC`、`AnyTLS`、`SOCKS5`、`HTTP`。
+   - 支持主流全部协议：`VMess`、`VLESS`（包含 Reality / Vision flow / VLESS Encryption）、`Shadowsocks (SS)`、`ShadowsocksR (SSR)`、`Trojan`、`Hysteria 1/2 (hy2)`、`TUIC`、`AnyTLS`、`WireGuard`、`SSH`、`Snell`、`Mieru`、`SOCKS5`、`HTTP`。
    - 支持直接解析标准 Base64 订阅文本、Clash / Mihomo YAML 订阅、多行 URI 混合文本。
    - 可以在前端直接粘贴机场链接，或一键导入剪贴板大段原始节点链接。
 
@@ -105,7 +105,7 @@
 SUB/
 ├── backend/                  # 服务端代码
 │   ├── server.js             # Express API 与 WebSocket 主服务
-│   ├── parser.js             # VMess/VLESS/SS/SSR/Trojan/Hy2/TUIC 等全协议解析器
+│   ├── parser.js             # VMess/VLESS/SS/SSR/Trojan/Hy2/TUIC/AnyTLS/WireGuard/SSH/Snell/Mieru 等全协议解析器
 │   ├── tester.js             # Mihomo 内核动态调用与并发延迟测速
 │   ├── generator.js          # Loyalsoldier 分流规则生成与订阅配置构建
 │   ├── fetcher.js            # 机场订阅远程抓取与容错更新

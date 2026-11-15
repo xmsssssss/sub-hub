@@ -10,6 +10,9 @@
  * - TUIC (tuic://)
  * - AnyTLS (anytls://)
  * - WireGuard (wireguard://)
+ * - SSH (ssh://)
+ * - Snell (snell://)
+ * - Mieru (mieru://)
  * - SOCKS5 / HTTP (socks5://, http://)
  * - Clash Proxies YAML / Base64 Raw lists
  */
@@ -97,6 +100,9 @@ function parseVless(uri) {
 
     const flow = params.get('flow');
     if (flow) node.flow = flow;
+
+    // VLESS Encryption（后量子加密，新版内核支持）
+    if (params.get('encryption')) node.encryption = params.get('encryption');
 
     const net = params.get('type') || 'tcp';
     node.network = net;
@@ -329,6 +335,158 @@ function parseAnyTLS(uri) {
   }
 }
 
+// 6.6 WireGuard
+function parseWireGuard(uri) {
+  try {
+    const u = new URL(uri);
+    const params = new URLSearchParams(u.search);
+    const privateKey = decodeURIComponent(u.username || params.get('privatekey') || params.get('private-key') || '');
+    const publicKey = params.get('publickey') || params.get('public-key') || '';
+    const address = params.get('address') || params.get('ip') || '';
+
+    const node = {
+      type: 'wireguard',
+      name: decodeURIComponent(u.hash ? u.hash.slice(1) : 'WireGuard-' + u.hostname),
+      server: u.hostname,
+      port: parseInt(u.port || 51820, 10),
+      'private-key': privateKey,
+      'public-key': publicKey,
+      udp: true
+    };
+
+    if (address) {
+      const ips = address.split(',').map(s => s.trim()).filter(Boolean);
+      const v4 = ips.filter(ip => !ip.includes(':'));
+      const v6 = ips.filter(ip => ip.includes(':'));
+      if (v4.length > 0) node.ip = v4.join(',');
+      if (v6.length > 0) node.ipv6 = v6.join(',');
+    }
+
+    const presharedKey = params.get('presharedkey') || params.get('preshared-key') || params.get('psk');
+    if (presharedKey) node['preshared-key'] = presharedKey;
+
+    if (params.get('mtu')) node.mtu = parseInt(params.get('mtu'), 10);
+
+    const reserved = params.get('reserved');
+    if (reserved) {
+      const nums = reserved.split(',').map(n => parseInt(n.trim(), 10)).filter(n => !isNaN(n));
+      if (nums.length > 0) node.reserved = nums;
+    }
+
+    if (params.get('dns')) node.dns = params.get('dns').split(',');
+    if (params.get('allowed-ips')) node['allowed-ips'] = params.get('allowed-ips').split(',');
+
+    if (!node.server || !node.port || !node['private-key'] || !node['public-key']) return null;
+    return node;
+  } catch (e) {
+    return null;
+  }
+}
+
+// 6.7 SSH
+function parseSSH(uri) {
+  try {
+    const u = new URL(uri);
+    const params = new URLSearchParams(u.search);
+
+    const node = {
+      type: 'ssh',
+      name: decodeURIComponent(u.hash ? u.hash.slice(1) : 'SSH-' + u.hostname),
+      server: u.hostname,
+      port: parseInt(u.port || 22, 10),
+      username: decodeURIComponent(u.username || 'root'),
+      udp: true
+    };
+
+    if (u.password) node.password = decodeURIComponent(u.password);
+
+    const privateKey = params.get('private-key') || params.get('privatekey');
+    if (privateKey) node['private-key'] = privateKey.replace(/\\n/g, '\n');
+
+    const passphrase = params.get('private-key-passphrase');
+    if (passphrase) node['private-key-passphrase'] = passphrase;
+
+    const hostKey = params.get('host-key') || params.get('hostkey');
+    if (hostKey) node['host-key'] = hostKey.split(',');
+
+    const algs = params.get('host-key-algorithms');
+    if (algs) node['host-key-algorithms'] = algs.split(',');
+
+    if (!node.server || !node.port || !node.username) return null;
+    if (!node.password && !node['private-key']) return null;
+    return node;
+  } catch (e) {
+    return null;
+  }
+}
+
+// 6.8 Snell
+function parseSnell(uri) {
+  try {
+    const u = new URL(uri);
+    const params = new URLSearchParams(u.search);
+
+    let psk = u.username ? decodeURIComponent(u.username) : (params.get('psk') || '');
+    // 兼容 snell://BASE64(psk)@host:port 形式（仅在解码结果为可打印字符串时采用，避免误伤普通 psk）
+    if (psk && !params.get('psk') && /^[A-Za-z0-9+/=_-]{8,}$/.test(psk)) {
+      const decoded = safeDecodeBase64(psk);
+      if (decoded && /^[\x20-\x7e]+$/.test(decoded) && !decoded.includes(':')) {
+        psk = decoded;
+      }
+    }
+
+    const node = {
+      type: 'snell',
+      name: decodeURIComponent(u.hash ? u.hash.slice(1) : 'Snell-' + u.hostname),
+      server: u.hostname,
+      port: parseInt(u.port || 443, 10),
+      psk: psk,
+      version: parseInt(params.get('version') || params.get('v') || 4, 10),
+      udp: true
+    };
+
+    const obfs = params.get('obfs');
+    if (obfs && obfs.toLowerCase() !== 'none') {
+      node['obfs-opts'] = { mode: obfs };
+      const host = params.get('obfs-host') || params.get('obfs_host') || params.get('host');
+      if (host) node['obfs-opts'].host = host;
+    }
+
+    if (!node.server || !node.port || !node.psk) return null;
+    return node;
+  } catch (e) {
+    return null;
+  }
+}
+
+// 6.9 Mieru
+function parseMieru(uri) {
+  try {
+    const u = new URL(uri);
+    const params = new URLSearchParams(u.search);
+
+    const node = {
+      type: 'mieru',
+      name: decodeURIComponent(u.hash ? u.hash.slice(1) : 'Mieru-' + u.hostname),
+      server: u.hostname,
+      port: parseInt(u.port || 443, 10),
+      username: decodeURIComponent(u.username || params.get('username') || ''),
+      password: decodeURIComponent(u.password || params.get('password') || ''),
+      transport: (params.get('transport') || 'TCP').toUpperCase(),
+      multiplexing: params.get('multiplexing') || 'MULTIPLEXING_OFF',
+      udp: true
+    };
+
+    const portRange = params.get('port-range') || params.get('port_range');
+    if (portRange) node['port-range'] = portRange;
+
+    if (!node.server || !node.port || !node.username || !node.password) return null;
+    return node;
+  } catch (e) {
+    return null;
+  }
+}
+
 // 7. SOCKS5 / HTTP
 function parseSocksHttp(uri) {
   try {
@@ -399,6 +557,10 @@ function parseUri(line) {
   if (line.startsWith('hy2://') || line.startsWith('hysteria2://') || line.startsWith('hysteria://')) return parseHysteria(line);
   if (line.startsWith('tuic://')) return parseTuic(line);
   if (line.startsWith('anytls://')) return parseAnyTLS(line);
+  if (line.startsWith('wireguard://') || line.startsWith('wg://')) return parseWireGuard(line);
+  if (line.startsWith('ssh://')) return parseSSH(line);
+  if (line.startsWith('snell://')) return parseSnell(line);
+  if (line.startsWith('mieru://')) return parseMieru(line);
   if (line.startsWith('socks5://') || line.startsWith('socks://') || line.startsWith('http://') || line.startsWith('https://')) return parseSocksHttp(line);
   return null;
 }

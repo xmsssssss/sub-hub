@@ -81,6 +81,10 @@
           <option value="hysteria">Hysteria 1</option>
           <option value="tuic">TUIC</option>
           <option value="anytls">AnyTLS</option>
+          <option value="wireguard">WireGuard</option>
+          <option value="ssh">SSH</option>
+          <option value="snell">Snell</option>
+          <option value="mieru">Mieru</option>
           <option value="socks5">SOCKS5 / HTTP</option>
         </select>
 

@@ -255,6 +255,10 @@ textarea {
 .badge-hysteria { background: #fce7f3; color: #be185d; border: 1px solid #fbcfe8; }
 .badge-tuic { background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
 .badge-anytls { background: #ffedd5; color: #c2410c; border: 1px solid #fed7aa; }
+.badge-wireguard { background: #f3e8ff; color: #7e22ce; border: 1px solid #e9d5ff; }
+.badge-ssh { background: #e0e7ff; color: #4338ca; border: 1px solid #c7d2fe; }
+.badge-snell { background: #cffafe; color: #0e7490; border: 1px solid #a5f3fc; }
+.badge-mieru { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
 .badge-socks5 { background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; }
 
 [data-theme="dark"] .badge-vmess { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
@@ -266,6 +270,10 @@ textarea {
 [data-theme="dark"] .badge-hysteria { background: rgba(244, 114, 182, 0.2); color: #f472b6; border: 1px solid rgba(244, 114, 182, 0.3); }
 [data-theme="dark"] .badge-tuic { background: rgba(14, 165, 233, 0.2); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.3); }
 [data-theme="dark"] .badge-anytls { background: rgba(249, 115, 22, 0.2); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.3); }
+[data-theme="dark"] .badge-wireguard { background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); }
+[data-theme="dark"] .badge-ssh { background: rgba(99, 102, 241, 0.2); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3); }
+[data-theme="dark"] .badge-snell { background: rgba(6, 182, 212, 0.2); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.3); }
+[data-theme="dark"] .badge-mieru { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
 [data-theme="dark"] .badge-socks5 { background: rgba(107, 114, 128, 0.2); color: #9ca3af; border: 1px solid rgba(107, 114, 128, 0.3); }
 
 /* Latency Status Colors */

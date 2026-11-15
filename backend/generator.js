@@ -347,6 +347,38 @@ function generateBase64Subscription(nodes) {
         if (node['client-fingerprint']) params.set('fp', node['client-fingerprint']);
         if (node.alpn) params.set('alpn', Array.isArray(node.alpn) ? node.alpn.join(',') : node.alpn);
         lines.push(`anytls://${encodeURIComponent(node.password)}@${node.server}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
+      } else if (node.type === 'wireguard') {
+        const params = new URLSearchParams();
+        params.set('publickey', node['public-key'] || '');
+        const addresses = [node.ip, node.ipv6].filter(Boolean).join(',');
+        if (addresses) params.set('address', addresses);
+        if (node['preshared-key']) params.set('presharedkey', node['preshared-key']);
+        if (node.mtu) params.set('mtu', String(node.mtu));
+        if (Array.isArray(node.reserved) && node.reserved.length > 0) params.set('reserved', node.reserved.join(','));
+        if (Array.isArray(node.dns) && node.dns.length > 0) params.set('dns', node.dns.join(','));
+        lines.push(`wireguard://${encodeURIComponent(node['private-key'] || '')}@${node.server}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
+      } else if (node.type === 'ssh') {
+        const params = new URLSearchParams();
+        if (node['private-key']) params.set('private-key', node['private-key'].replace(/\n/g, '\\n'));
+        if (node['private-key-passphrase']) params.set('private-key-passphrase', node['private-key-passphrase']);
+        if (Array.isArray(node['host-key']) && node['host-key'].length > 0) params.set('host-key', node['host-key'].join(','));
+        if (Array.isArray(node['host-key-algorithms']) && node['host-key-algorithms'].length > 0) params.set('host-key-algorithms', node['host-key-algorithms'].join(','));
+        const auth = node.password ? `${encodeURIComponent(node.username)}:${encodeURIComponent(node.password)}` : encodeURIComponent(node.username || '');
+        const qs = params.toString();
+        lines.push(`ssh://${auth}@${node.server}:${node.port}${qs ? '?' + qs : ''}#${encodeURIComponent(node.name)}`);
+      } else if (node.type === 'snell') {
+        const params = new URLSearchParams();
+        if (node.version) params.set('version', String(node.version));
+        if (node['obfs-opts']?.mode) params.set('obfs', node['obfs-opts'].mode);
+        if (node['obfs-opts']?.host) params.set('obfs-host', node['obfs-opts'].host);
+        lines.push(`snell://${encodeURIComponent(node.psk)}@${node.server}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
+      } else if (node.type === 'mieru') {
+        const params = new URLSearchParams();
+        if (node.transport) params.set('transport', node.transport);
+        if (node.multiplexing) params.set('multiplexing', node.multiplexing);
+        if (node['port-range']) params.set('port-range', node['port-range']);
+        const auth = `${encodeURIComponent(node.username || '')}:${encodeURIComponent(node.password || '')}`;
+        lines.push(`mieru://${auth}@${node.server}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
       }
     } catch (e) {}
   }
